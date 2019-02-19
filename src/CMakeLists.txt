@@ -77,7 +77,7 @@ get_property (link_flags TARGET deltafs-shuffle PROPERTY LINK_FLAGS)
 #
 write_basic_package_version_file(
         "deltafs-shuffle-config-version.cmake"
-        VERSION $DELTAFS_SHUFFLE_VERSION}
+        VERSION ${DELTAFS_SHUFFLE_VERSION}
         COMPATIBILITY AnyNewerVersion)
 
 # generate our config file for "find_package"

@@ -3,7 +3,11 @@
 #
 
 # list of source files
-set (deltafs-shuffle-srcs shuffle_internal.cc shuffle.cc)
+set (deltafs-shuffle-srcs shuffle_internal.cc shuffle.cc
+        shuffler/shuffler.cc
+        shuffler/shuf_mlog.cc
+        shuffler/acnt_wrap.c
+        shuffler/mlog.c)
 
 #
 # configure/load in standard modules we plan to use and probe the enviroment

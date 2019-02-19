@@ -1,0 +1,34 @@
+#
+# deltafs-shuffle-config.cmake.in
+#
+
+include (CMakeFindDependencyMacro)
+
+find_dependency(deltafs-nexus)
+find_dependency(mercury)
+find_dependency(MPI)
+
+include ("${CMAKE_CURRENT_LIST_DIR}/deltafs-shuffle-targets.cmake")
+
+#
+# FindMPI doesn't generate an imported target, so chain it on to our target
+#
+set_property (TARGET deltafs-shuffle APPEND PROPERTY
+        INTERFACE_INCLUDE_DIRECTORIES ${MPI_CXX_INCLUDE_PATH})
+set_property (TARGET deltafs-shuffle APPEND PROPERTY
+        INTERFACE_LINK_LIBRARIES ${MPI_CXX_LIBRARIES})
+
+# mpich on ub14 gives a leading space that we need to trim off
+string (REPLACE " " ";" mpiccx_flags "${MPI_CXX_COMPILE_FLAGS}")
+foreach (lcv ${mpiccx_flags})
+    if (NOT ${lcv} STREQUAL "")
+        set_property (TARGET deltafs-shuffle APPEND PROPERTY
+                INTERFACE_COMPILE_OPTIONS ${lcv})
+    endif ()
+endforeach ()
+
+set_property (TARGET deltafs-shuffle APPEND PROPERTY LINK_FLAGS
+        ${MPI_CXX_LINK_FLAGS})
+#
+# end of FindMPI fix
+#

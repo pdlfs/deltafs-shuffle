@@ -45,6 +45,9 @@ target_link_libraries (deltafs-shuffle mercury)
 # XXX: cmake 3.1 and newer define a Threads::Threads imported target
 # that we should switch too when we are ready to require 3.1 or better.
 # (3.1 was released late 2014)
+if (THREADS_HAVE_PTHREAD_ARG)
+    target_compile_options(deltafs-shuffle PUBLIC "-pthread")
+endif ()
 if (CMAKE_THREAD_LIBS_INIT)
     target_link_libraries (deltafs-shuffle "${CMAKE_THREAD_LIBS_INIT}")
 endif ()
@@ -54,9 +57,7 @@ set_target_properties(deltafs-shuffle
         SOVERSION ${DELTAFS_SHUFFLE_VERSION_MAJOR})
 
 # special handling for MPI, where the config comes in via MPI_<lang>_ vars.
-# Note that the mpich on ub14 gives a leading space that we need to trim off.
-string (REPLACE " " ";" mpicxx_flags "${MPI_CXX_COMPILE_FLAGS}")
-foreach (lcv ${mpicxx_flags})
+foreach (lcv ${MPI_CXX_COMPILE_FLAGS_LIST})
     if (NOT ${lcv} STREQUAL "")
         target_compile_options (deltafs-shuffle PUBLIC $<BUILD_INTERFACE:${lcv}>)
     endif ()

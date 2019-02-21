@@ -48,7 +48,6 @@ if (${CMAKE_BUILD_TYPE} STREQUAL "Debug")
 endif ()
 
 # Find required packages
-find_package (Threads REQUIRED)
 find_package (deltafs-nexus CONFIG REQUIRED)
 find_package (mercury CONFIG REQUIRED)
 

@@ -17,6 +17,8 @@ include (CMakePackageConfigHelpers)
 set (CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set (THREADS_PREFER_PTHREAD_FLAG TRUE)
 
+find_package (Threads REQUIRED)
+
 #
 # library version set here (e.g. for shared libs).
 #
@@ -46,7 +48,7 @@ target_link_libraries (deltafs-shuffle mercury)
 # that we should switch too when we are ready to require 3.1 or better.
 # (3.1 was released late 2014)
 if (THREADS_HAVE_PTHREAD_ARG)
-    target_compile_options(deltafs-shuffle PUBLIC "-pthread")
+    target_compile_options (deltafs-shuffle PUBLIC "-pthread")
 endif ()
 if (CMAKE_THREAD_LIBS_INIT)
     target_link_libraries (deltafs-shuffle "${CMAKE_THREAD_LIBS_INIT}")
@@ -66,7 +68,7 @@ foreach (lcv ${MPI_CXX_INCLUDE_PATH})
     target_include_directories (deltafs-shuffle PUBLIC $<BUILD_INTERFACE:${lcv}>)
 endforeach ()
 foreach (lcv ${MPI_CXX_LIBRARIES})
-    target_link_libraries(deltafs-shuffle $<BUILD_INTERFACE:${lcv}>)
+    target_link_libraries (deltafs-shuffle $<BUILD_INTERFACE:${lcv}>)
 endforeach ()
 
 set_property (TARGET deltafs-shuffle APPEND PROPERTY LINK_FLAGS
@@ -76,8 +78,7 @@ get_property (link_flags TARGET deltafs-shuffle PROPERTY LINK_FLAGS)
 #
 # installation stuff (packaging and install commands)
 #
-write_basic_package_version_file(
-        "deltafs-shuffle-config-version.cmake"
+write_basic_package_version_file ("deltafs-shuffle-config-version.cmake"
         VERSION ${DELTAFS_SHUFFLE_VERSION}
         COMPATIBILITY AnyNewerVersion)
 

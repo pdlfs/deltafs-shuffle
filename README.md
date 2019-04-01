@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-New%20BSD-blue.svg)](LICENSE)
 
-deltafs-shuffle
+DeltaFS Shuffle
 ===============
 
 ```
@@ -25,7 +25,8 @@ DeltaFS was developed, in part, under U.S. Government contract 89233218CNA000001
 
 # Features
 
-TODO
+* Configureable message write-back buffering and asynchronous message sending
+* Three-hop message routing instead of direct end-to-end routing
 
 # Documentation
 
@@ -55,6 +56,8 @@ env CC=/usr/local/bin/gcc-<n> CXX=/usr/local/bin/g++-<n> \
   brew install --build-from-source mpich
 ```
 
+## Mercury
+
 Next, we need to install `mercury`. This can be done as follows:
 
 ```bash
@@ -68,6 +71,8 @@ cmake -DBUILD_SHARED_LIBS=ON \
   -DNA_USE_SM=ON \
 ..
 ```
+
+## DeltaFS Nexus
 
 Lastly, we need to install `deltafs-nexus`. This can be done as follows:
 

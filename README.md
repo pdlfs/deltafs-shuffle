@@ -93,8 +93,7 @@ mkdir build
 cd build
 cmake -DBUILD_SHARED_LIBS=ON \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_PREFIX_PATH="</tmp/deltafs-nexus-prefix>;</tmp/mercury-prefix>" \
   -DCMAKE_INSTALL_PREFIX=</tmp/deltafs-shuffle-prefix> \
-  -DCMAKE_PREFIX_PATH=</tmp/deltafs-nexus-prefix>;\
-    </tmp/mercury-prefix> \
 ..
 ```

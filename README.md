@@ -2,32 +2,35 @@
 
 [![License](https://img.shields.io/badge/license-New%20BSD-blue.svg)](LICENSE)
 
-deltafs-shuffle
+DeltaFS Shuffle
 ===============
 
 ```
-          xxx                                 xxx
-         xxx                                   xxx
-        xxx                                     xxx
-       xxx                                       xxx
-      xxx                   xxxx                  xxx
-     xxx      x           xx    xx                 xxx
-    xxx      xx          xx      xx                 xxx
-   xxx      xxx                 xx          x        xxx
-  xxx      xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  xx   xxxxxxxx
- xxx        xxx               xxx           xxx        xxx
-  xxxxxxxx   xx  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx      xxx
-   xxx        x                 xx          xxx      xxx
-    xxx                          xx         xx      xxx
-     xxx                 xx     xx          x      xxx
-      xxx                  xxxxx                  xxx
-       xxx                                       xxx
-        xxx                                     xxx
-         xxx                                   xxx
-          xxx                                 xxx
+XXXXXXXXX
+XX      XX                 XX                  XXXXXXXXXXX
+XX       XX                XX                  XX
+XX        XX               XX                  XX
+XX         XX              XX   XX             XX
+XX          XX             XX   XX             XXXXXXXXX
+XX           XX  XXXXXXX   XX XXXXXXXXXXXXXXX  XX         XX
+XX          XX  XX     XX  XX   XX       XX XX XX      XX
+XX         XX  XX       XX XX   XX      XX  XX XX    XX
+XX        XX   XXXXXXXXXX  XX   XX     XX   XX XX    XXXXXXXX
+XX       XX    XX          XX   XX    XX    XX XX           XX
+XX      XX      XX      XX XX   XX X    XX  XX XX         XX
+XXXXXXXXX        XXXXXXX   XX    XX        XX  XX      XX
 ```
 
-Please see the accompanying LICENSE file for licensing details. `deltafs-shuffle` is still under development.
+DeltaFS was developed, in part, under U.S. Government contract 89233218CNA000001 for Los Alamos National Laboratory (LANL), which is operated by Triad National Security, LLC for the U.S. Department of Energy/National Nuclear Security Administration. Please see the accompanying [LICENSE.txt](LICENSE.txt) for further information.
+
+# Features
+
+* Configureable message write-back buffering and asynchronous message sending
+* Three-hop message routing instead of direct end-to-end routing
+
+# Documentation
+
+TODO
 
 # Software requirements
 
@@ -53,6 +56,8 @@ env CC=/usr/local/bin/gcc-<n> CXX=/usr/local/bin/g++-<n> \
   brew install --build-from-source mpich
 ```
 
+## Mercury
+
 Next, we need to install `mercury`. This can be done as follows:
 
 ```bash
@@ -66,6 +71,8 @@ cmake -DBUILD_SHARED_LIBS=ON \
   -DNA_USE_SM=ON \
 ..
 ```
+
+## DeltaFS Nexus
 
 Lastly, we need to install `deltafs-nexus`. This can be done as follows:
 
@@ -91,8 +98,7 @@ mkdir build
 cd build
 cmake -DBUILD_SHARED_LIBS=ON \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_PREFIX_PATH="</tmp/deltafs-nexus-prefix>;</tmp/mercury-prefix>" \
   -DCMAKE_INSTALL_PREFIX=</tmp/deltafs-shuffle-prefix> \
-  -DCMAKE_PREFIX_PATH=</tmp/deltafs-nexus-prefix>;\
-    </tmp/mercury-prefix> \
 ..
 ```

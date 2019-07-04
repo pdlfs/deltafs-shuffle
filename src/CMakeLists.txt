@@ -29,6 +29,7 @@ set (CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set (THREADS_PREFER_PTHREAD_FLAG TRUE)
 
 find_package (Threads REQUIRED)
+find_package (MPI MODULE REQUIRED)
 
 #
 # library version set here (e.g. for shared libs).
@@ -55,36 +56,33 @@ target_include_directories (deltafs-shuffle BEFORE PUBLIC
 
 target_link_libraries (deltafs-shuffle deltafs-nexus)
 target_link_libraries (deltafs-shuffle mercury)
-# XXX: cmake 3.1 and newer define a Threads::Threads imported target
-# that we should switch too when we are ready to require 3.1 or better.
-# (3.1 was released late 2014)
-if (THREADS_HAVE_PTHREAD_ARG)
-    target_compile_options (deltafs-shuffle PUBLIC "-pthread")
-endif ()
-if (CMAKE_THREAD_LIBS_INIT)
-    target_link_libraries (deltafs-shuffle "${CMAKE_THREAD_LIBS_INIT}")
-endif ()
+target_link_libraries (deltafs-shuffle Threads::Threads)
 
-set_target_properties(deltafs-shuffle
-        PROPERTIES VERSION ${DELTAFS_SHUFFLE_VERSION}
-        SOVERSION ${DELTAFS_SHUFFLE_VERSION_MAJOR})
+foreach (lcv ${MPI_CXX_COMPILE_DEFINITIONS})
+    target_compile_definitions (deltafs-shuffle
+            PUBLIC $<BUILD_INTERFACE:${lcv}>)
+endforeach ()
 
-# special handling for MPI, where the config comes in via MPI_<lang>_ vars.
-foreach (lcv ${MPI_CXX_COMPILE_FLAGS_LIST})
-    if (NOT ${lcv} STREQUAL "")
-        target_compile_options (deltafs-shuffle PUBLIC $<BUILD_INTERFACE:${lcv}>)
-    endif ()
+foreach (lcv ${MPI_CXX_COMPILE_OPTIONS})
+    target_compile_options (deltafs-shuffle
+            PUBLIC $<BUILD_INTERFACE:${lcv}>)
 endforeach ()
-foreach (lcv ${MPI_CXX_INCLUDE_PATH})
-    target_include_directories (deltafs-shuffle PUBLIC $<BUILD_INTERFACE:${lcv}>)
+
+foreach (lcv ${MPI_CXX_INCLUDE_DIRS})
+    target_include_directories (deltafs-shuffle
+            PUBLIC $<BUILD_INTERFACE:${lcv}>)
 endforeach ()
+
 foreach (lcv ${MPI_CXX_LIBRARIES})
     target_link_libraries (deltafs-shuffle $<BUILD_INTERFACE:${lcv}>)
 endforeach ()
 
 set_property (TARGET deltafs-shuffle APPEND PROPERTY LINK_FLAGS
         ${MPI_CXX_LINK_FLAGS})
-get_property (link_flags TARGET deltafs-shuffle PROPERTY LINK_FLAGS)
+
+set_target_properties(deltafs-shuffle
+        PROPERTIES VERSION ${DELTAFS_SHUFFLE_VERSION}
+        SOVERSION ${DELTAFS_SHUFFLE_VERSION_MAJOR})
 
 #
 # installation stuff (packaging and install commands)

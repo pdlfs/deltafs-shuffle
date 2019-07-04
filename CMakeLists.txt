@@ -23,7 +23,7 @@
 #      -DCMAKE_PREFIX_PATH='/dir1;/dir2;/dir3'
 #
 
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.10)
 project (deltafs-shuffle C CXX)
 
 # link shared lib with full rpath
@@ -61,9 +61,5 @@ endif ()
 # Find required packages
 find_package (deltafs-nexus CONFIG REQUIRED)
 find_package (mercury CONFIG REQUIRED)
-
-find_package (MPI MODULE REQUIRED)
-# XXX: avoid issues when MPI_CXX_COMPILE_FLAGS contains leading spaces
-string (REPLACE " " ";" MPI_CXX_COMPILE_FLAGS_LIST "${MPI_CXX_COMPILE_FLAGS}")
 
 add_subdirectory (src)

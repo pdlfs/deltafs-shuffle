@@ -14,7 +14,7 @@
 #
 
 # list of source files
-set (deltafs-shuffle-srcs shuffle_internal.cc shuffle.cc
+set (deltafs-shuffle-srcs shufapi.cc
         shuffler/shuffler.cc
         shuffler/shuf_mlog.cc
         shuffler/acnt_wrap.c

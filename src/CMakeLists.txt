@@ -53,7 +53,15 @@ target_include_directories (deltafs-shuffle BEFORE PUBLIC
 
 target_link_libraries (deltafs-shuffle deltafs-nexus)
 target_link_libraries (deltafs-shuffle mercury)
-target_link_libraries (deltafs-shuffle Threads::Threads)
+# XXX: cmake 3.1 and newer define a Threads::Threads imported target
+# that we should switch too when we are ready to require 3.1 or better.
+# (3.1 was released late 2014)
+if (THREADS_HAVE_PTHREAD_ARG)
+    target_compile_options (deltafs-shuffle PUBLIC "-pthread")
+endif ()
+if (CMAKE_THREAD_LIBS_INIT)
+    target_link_libraries (deltafs-shuffle "${CMAKE_THREAD_LIBS_INIT}")
+endif ()
 
 set_target_properties(deltafs-shuffle
         PROPERTIES VERSION ${DELTAFS_SHUFFLE_VERSION}

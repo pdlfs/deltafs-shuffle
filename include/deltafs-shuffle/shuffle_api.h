@@ -242,7 +242,7 @@ hg_return_t shuffle_flush_qs(shuffle_t sh, int whichqs);
  * @return status
  */
 #define shuffle_flush_originqs(S) \
-        shuffle_flush_qs((S), SHUFFLER_ORIGIN_QUEUES)
+        shuffle_flush_qs((S), SHUFFLE_ORIGIN_QUEUES)
 
 /*
  * shuffle_flush_relayqs: flush relay qs (wrap for shuffle_flush_qs)
@@ -251,7 +251,7 @@ hg_return_t shuffle_flush_qs(shuffle_t sh, int whichqs);
  * @return status
  */
 #define shuffle_flush_relayqs(S) \
-        shuffle_flush_qs((S), SHUFFLER_RELAY_QUEUES)
+        shuffle_flush_qs((S), SHUFFLE_RELAY_QUEUES)
 
 
 /*
@@ -261,7 +261,7 @@ hg_return_t shuffle_flush_qs(shuffle_t sh, int whichqs);
  * @return status
  */
 #define shuffle_flush_remoteqs(S) \
-        shuffle_flush_qs((S), SHUFFLER_REMOTE_QUEUES)
+        shuffle_flush_qs((S), SHUFFLE_REMOTE_QUEUES)
 
 
 /*

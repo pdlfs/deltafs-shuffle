@@ -25,7 +25,7 @@ DeltaFS was developed, in part, under U.S. Government contract 89233218CNA000001
 
 # Features
 
-* Configureable message write-back buffering and asynchronous message sending
+* Configurable message write-back buffering and asynchronous message sending
 * Three-hop message routing instead of direct end-to-end routing
 
 # Documentation
@@ -110,8 +110,8 @@ deltafs-nexus for details...).
 The shuffle API is a C-style API that operates on shuffle handles
 objects (shuffle_t).  To allocate and init a shuffle object, you
 first must have init'd mercury and allocated a nexus context
-for routing (e.g. with neuxs_bootstrap() -- see the deltafs-nexus
-repositroy for details on the nexus API).   One that is done,
+for routing (e.g. with nexus_bootstrap() -- see the deltafs-nexus
+repository for details on the nexus API).   One that is done,
 you can call shuffle_init() to allocate a shuffle object.
 As part of the shuffle_init() call, you must provide a pointer to a
 callback function that is called to deliver shuffle data that has
@@ -149,7 +149,7 @@ thread creates backpressure and will eventually trigger the shuffle's
 flow control mechanisms.
 
 The shuffle_opts structure contains all the shuffle's flow control
-and batching/queueing options:
+and batching/queuing options:
 ```
 struct shuffle_opts {
   int localsenderlimit;   /* max# of local RPCs we allow */
@@ -180,14 +180,14 @@ hg_return_t shuffle_enqueue(shuffle_t sh, int dst, uint32_t type,
 The "dst" is the global rank of the destination process.   The "type"
 is a per-message int that the shuffle service makes available to users
 to use in an application-dependent way -- it is passed through the
-shuflle layer to the delivery callback function.
+shuffle layer to the delivery callback function.
 
 The shuffle services provides 4 flush functions.  These functions
 operate only on the local queues.  They can be combined with collective
 ops (e.g. MPI_Barrier()) to build higher-level flush operations.
 
 The delivery flush function blocks until all requests currently
-in the delivery quue are delivered.   It makes no claims about
+in the delivery queue are delivered.   It makes no claims about
 requests that arrive after the flush has started.
 ```
 hg_return_t shuffle_flush_delivery(shuffle_t sh);

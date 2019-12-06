@@ -29,12 +29,12 @@
  */
 
 /*
- * shuffler_internal.h  shuffler internal data structures
+ * shuffle_internal.h  shuffle internal data structures
  * 28-Jun-2017  chuck@ece.cmu.edu
  */
 
 /*
- * internal data structures for the 3 hop shuffler.
+ * internal data structures for the 3 hop shuffle.
  */
 
 #include <time.h>
@@ -46,7 +46,7 @@
 
 struct req_parent;                  /* forward decl, see below */
 struct outset;                      /* forward decl, see below */
-struct hgthread;                    /* forward decl, see below */
+struct hgprogress;                  /* forward decl, see below */
 
 /*
  * request: a structure to describe a single write request.
@@ -102,7 +102,7 @@ typedef struct {
 /*
  * req_parent: a structure to describe the owner of a group of
  * one or more waiting requests.  the owner is either the main
- * application thread (via shuffler_send()) or it is an
+ * application thread (via shuffle_enqueue()) or it is an
  * hg_handle_t from an inbound rpc request.   we use this
  * to track when all requests have been processed and the caller
  * can continue or the rpc can be responded to (this is for flow
@@ -122,7 +122,7 @@ struct req_parent {
   int32_t rpcin_forwrank;           /* saved copy of rpcin.forwardrank */
   hg_handle_t input;                /* RPC input, or NULL for app input */
   int32_t timewstart;               /* time wait started */
-  /* next three only used if input == NULL (thus via shuffler_send()) */
+  /* next three only used if input == NULL (thus via shuffle_enqueue()) */
   pthread_mutex_t pcvlock;          /* lock for pcv */
   pthread_cond_t pcv;               /* app may block here for flow ctl */
   int need_wakeup;                  /* need wakeup when nrefs cleared */
@@ -182,7 +182,7 @@ struct outqueue {
   int oqflush_waitcounter;          /* #of waitq reqs flush is waiting on */
   struct output *oqflush_output;    /* output flush is waiting on */
 
-#ifdef SHUFFLER_COUNT
+#ifdef SHUFFLE_COUNT
   /* index 0 is for input==NULL (local reqs), 1 for forwarded reqs */
   int cntoqreqs[2];                 /* number of reqs queued here */
   int cntoqsends;                   /* number of RPCs sent */
@@ -195,7 +195,7 @@ struct outqueue {
 };
 
 /*
- * shufsend_waiter: a shuffler_send() API call that has been blocked
+ * shufsend_waiter: a shuffle_enqueue() API call that has been blocked
  * due to the total number of active outset RPCs exceeding shufsend_rpclimit.
  */
 struct shufsend_waiter {
@@ -209,7 +209,7 @@ struct shufsend_waiter {
 };
 
 /*
- * sendwaiterlist: list of shuffler_send() ops waiting for an outset's
+ * sendwaiterlist: list of shuffle_enqueue() ops waiting for an outset's
  * shufsend_rpclimit to drop.
  */
 XTAILQ_HEAD(sendwaiterlist, shufsend_waiter);
@@ -222,17 +222,17 @@ struct outset {
   int maxoqrpc;                     /* max# of outstanding sent RPCs on an oq */
   int buftarget;                    /* target size of an RPC (in bytes) */
   int settype;                      /* remote, origin, or relay */
-  int shufsend_rpclimit;            /* block shuffler_send() if past limit */
+  int shufsend_rpclimit;            /* block shuffle_enqueue() if past limit */
 
   /* general state */
-  shuffler_t shuf;                  /* shuffler that owns us */
-  struct hgthread *myhgt;           /* mercury thread that services us */
+  shuffle_t shuf;                   /* shuffle that owns us */
+  struct hgprogress *myhgp;         /* mercury progessor that services us */
 
-  /* shuffler_send() rpc limit */
+  /* shuffle_enqueue() rpc limit */
   pthread_mutex_t os_rpclimitlock;  /* locks next two items */
   int outset_nrpcs;                 /* total# of RPCs running in mercury */
-  struct sendwaiterlist shufsendq;  /* list of waiting shuffler_send() ops */
-#ifdef SHUFFLER_COUNT
+  struct sendwaiterlist shufsendq;  /* list of waiting shuffle_send() ops */
+#ifdef SHUFFLE_COUNT
   int os_senderlimit;               /* #of times we hit shufsend_rpclimit */
 #endif
 
@@ -265,39 +265,33 @@ struct flush_op {
 XSIMPLEQ_HEAD(flush_queue, flush_op);
 
 /*
- * hgthread: state for a mercury progress/trigger thread
+ * hgprogress: state for a mercury progress/trigger thread
  */
-struct hgthread {
-  struct shuffler *hgshuf;          /* shuffler that owns us */
-  hg_class_t *mcls;                 /* mercury class */
-  hg_context_t *mctx;               /* mercury context */
+struct hgprogress {
+  struct shuffle *hgshuf;           /* shuffle that owns us */
+  progressor_handle_t *mphand;      /* mercury progressor handle */
+  hg_class_t *mcls;                 /* mercury class (cached from phand) */
+  hg_context_t *mctx;               /* mercury context (cached from phand) */
   hg_id_t rpcid;                    /* id of this RPC */
-  int nshutdown;                    /* to signal ntask to shutdown */
-  int nrunning;                     /* ntask is valid and running */
-  pthread_t ntask;                  /* network thread */
-
-#ifdef SHUFFLER_COUNT
-  /* stats (only modified/updated by ntask) */
-  int nprogress;                    /* mercury progress fn counter */
-  int ntrigger;                     /* mercury trigger fn counter */
-#endif
+  int nshutdown;                    /* network shutdown in progress? */
+  int nrunning;                     /* network/progessor valid and running? */
 };
 
 /*
- * shuffler: top-level shuffler structure
+ * shuffle: top-level shuffle structure
  */
-struct shuffler {
+struct shuffle {
   /* general config */
   nexus_ctx_t nxp;                  /* routing table */
-  int single_hgmode;                /* XXX: hack for single_hgmode */
+  int single_hgmode;                /* same hgctx for both local and remote? */
   int grank;                        /* my global rank */
   char *funname;                    /* strdup'd copy of mercury func. name */
   int disablesend;                  /* disable new sends (for shutdown) */
   time_t boottime;                  /* time we started */
 
-  /* mercury threads */
-  struct hgthread hgt_local;        /* local thread (na+sm) */
-  struct hgthread hgt_remote;       /* network thread (bmi+tcp, etc.) */
+  /* mercury progressor linkage */
+  struct hgprogress hgp_local;      /* local progress (na+sm) */
+  struct hgprogress hgp_remote;     /* network progress (bmi+tcp, etc.) */
 
   /* output queues */
   struct outset local_orq;          /* for origin/client na+sm to local procs */
@@ -308,7 +302,7 @@ struct shuffler {
   /* delivery queue cfg */
   int deliverq_max;                 /* max #reqs we queue before blocking */
   int deliverq_threshold;           /* wake dlvr when #reqs on q > threshold */
-  shuffler_deliver_t delivercb;     /* callback function ptr */
+  shuffle_deliverfn_t delivercb;    /* callback function ptr */
 
   /* delivery thread and queue itself */
   pthread_mutex_t deliverlock;      /* locks this block of fields */
@@ -335,7 +329,7 @@ struct shuffler {
 #define FLUSH_DELIVER    4          /* flushing delivery queue */
 #define FLUSH_NTYPES     5          /* number of types */
 
-#ifdef SHUFFLER_COUNT
+#ifdef SHUFFLE_COUNT
   /* lock by flushlock */
   int cntflush[FLUSH_NTYPES];       /* number of flush reqs by type */
   int cntflushwait;                 /* number of blocked flush reqs */

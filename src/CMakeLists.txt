@@ -14,11 +14,7 @@
 #
 
 # list of source files
-set (deltafs-shuffle-srcs shufapi.cc
-        shuffler/shuffler.cc
-        shuffler/shuf_mlog.cc
-        shuffler/acnt_wrap.c
-        shuffler/mlog.c)
+set (deltafs-shuffle-srcs acnt_wrap.c shuf_mlog.cc  shuffle.cc)
 
 #
 # configure/load in standard modules we plan to use and probe the enviroment
@@ -29,7 +25,9 @@ set (CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set (THREADS_PREFER_PTHREAD_FLAG TRUE)
 
 find_package (Threads REQUIRED)
-find_package (MPI MODULE REQUIRED)
+
+# where to install files for "find_package"
+set (deltafs-shuffle-pkg-loc "share/cmake/deltafs-shuffle")
 
 #
 # library version set here (e.g. for shared libs).
@@ -44,12 +42,11 @@ set (DELTAFS_SHUFFLE_VERSION
 
 #
 # create library target (user can specify shared vs. static using
-# BUILD_SHARED_LIBS).  arrange for users of our lib to get the correct
-# -I's for our include directories.
+# BUILD_SHARED_LIBS).  arrange for users of our lib to get the correct "-I"'s
 #
 add_library (deltafs-shuffle ${deltafs-shuffle-srcs})
-
 target_include_directories (deltafs-shuffle PUBLIC $<INSTALL_INTERFACE:include>)
+
 # make sure our build includes are BEFORE a previously installed version
 target_include_directories (deltafs-shuffle BEFORE PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>)
@@ -57,28 +54,6 @@ target_include_directories (deltafs-shuffle BEFORE PUBLIC
 target_link_libraries (deltafs-shuffle deltafs-nexus)
 target_link_libraries (deltafs-shuffle mercury)
 target_link_libraries (deltafs-shuffle Threads::Threads)
-
-foreach (lcv ${MPI_CXX_COMPILE_DEFINITIONS})
-    target_compile_definitions (deltafs-shuffle
-            PUBLIC $<BUILD_INTERFACE:${lcv}>)
-endforeach ()
-
-foreach (lcv ${MPI_CXX_COMPILE_OPTIONS})
-    target_compile_options (deltafs-shuffle
-            PUBLIC $<BUILD_INTERFACE:${lcv}>)
-endforeach ()
-
-foreach (lcv ${MPI_CXX_INCLUDE_DIRS})
-    target_include_directories (deltafs-shuffle
-            PUBLIC $<BUILD_INTERFACE:${lcv}>)
-endforeach ()
-
-foreach (lcv ${MPI_CXX_LIBRARIES})
-    target_link_libraries (deltafs-shuffle $<BUILD_INTERFACE:${lcv}>)
-endforeach ()
-
-set_property (TARGET deltafs-shuffle APPEND PROPERTY LINK_FLAGS
-        ${MPI_CXX_LINK_FLAGS})
 
 set_target_properties(deltafs-shuffle
         PROPERTIES VERSION ${DELTAFS_SHUFFLE_VERSION}
@@ -92,10 +67,8 @@ write_basic_package_version_file ("deltafs-shuffle-config-version.cmake"
         COMPATIBILITY AnyNewerVersion)
 
 # generate our config file for "find_package"
-configure_file (deltafs-shuffle-config.cmake.in deltafs-shuffle-config.cmake @ONLY)
-
-# where to install files for "find_package"
-set (deltafs-shuffle-pkg-loc "share/cmake/deltafs-shuffle")
+configure_file (deltafs-shuffle-config.cmake.in
+                deltafs-shuffle-config.cmake @ONLY)
 
 #
 # "make install" rules
@@ -109,6 +82,5 @@ install (EXPORT deltafs-shuffle-targets
 install (FILES "${CMAKE_CURRENT_BINARY_DIR}/deltafs-shuffle-config.cmake"
         "${CMAKE_CURRENT_BINARY_DIR}/deltafs-shuffle-config-version.cmake"
         DESTINATION ${deltafs-shuffle-pkg-loc} )
-install (DIRECTORY ../include/deltafs-shuffle
-        DESTINATION include
-        FILES_MATCHING PATTERN "*.h")
+install (FILES ../include/deltafs-shuffle/shufapi.h
+         DESTINATION include/deltafs-shuffle)

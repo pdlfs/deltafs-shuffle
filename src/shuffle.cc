@@ -29,7 +29,7 @@
  */
 
 /*
- * shuffler.cc  3 hop shuffle code
+ * shuffle.cc  3 hop shuffle code
  * 28-Jun-2017  chuck@ece.cmu.edu
  */
 
@@ -50,11 +50,11 @@
 #include <mercury_macros.h>
 #include <deltafs-nexus/deltafs-nexus_api.h>
 
-#include "shuffler.h"
+#include "deltafs-shuffle/shuffle_api.h"
 
-#define SHUFFLER_COUNT           /* enable/disable internal counters */
-#define SHUFFLER_TIMEOUT 300     /* API blocking timeout, in seconds */
-#include "shuffler_internal.h"
+#define SHUFFLE_COUNT           /* enable/disable internal counters */
+#define SHUFFLE_TIMEOUT 300     /* API blocking timeout, in seconds */
+#include "shuffle_internal.h"
 
 /*
  * quick reminder:
@@ -79,8 +79,8 @@
  * (the final hop is always via the delivery thread)
  *
  * "send" vs "forward":
- *  - applications "send" a single request via the shuffler_send() API
- *  - shuffler "forwards" RPCs received from shuffler_rpchand() callback,
+ *  - applications "send" a single request via the shuffle_enqueue() API
+ *  - shuffle "forwards" RPCs received from shuffle_rpchand() callback,
  *    each RPC contains a batch of one or more requests
  *
  * write back buffering handled by allowing requests to complete when
@@ -110,41 +110,41 @@ static struct shufcfglog {
 } shufcfg = { 0 };
 
 /*
- * shuffler_cfglog: setup logging before starting shuffler.  call
- * this before shuffler_init() so that everything can be properly
+ * shuffle_cfglog: setup logging before starting shuffle.  call
+ * this before shuffle_init() so that everything can be properly
  * logged...
  */
-int shuffler_cfglog(int max_xtra_rank, const char *defpri,
-                    const char *stderrpri, const char *mask,
-                    const char *xmask, const char *logfile,
-                    int alllogs, int msgbufsz, int stderrlog,
-                    int xtra_stderrlog) {
+int shuffle_cfglog(int max_xtra_rank, const char *defpri,
+                   const char *stderrpri, const char *mask,
+                   const char *xmask, const char *logfile,
+                   int alllogs, int msgbufsz, int stderrlog,
+                   int xtra_stderrlog) {
   char *tmpbuf;
 
   shufcfg.max_xtra_rank = max_xtra_rank;
 
   shufcfg.defpri = (defpri) ? shuf::mlog_str2pri(defpri) : MLOG_WARN;
   if (shufcfg.defpri == -1) {
-    fprintf(stderr, "shuffler_cfglog: bad defpri %s\n", defpri);
+    fprintf(stderr, "shuffle_cfglog: bad defpri %s\n", defpri);
     return(-1);
   }
 
   shufcfg.stderrpri = (stderrpri) ?
                         shuf::mlog_str2pri(stderrpri) : MLOG_WARN;
   if (shufcfg.stderrpri == -1) {
-    fprintf(stderr, "shuffler_cfglog: bad stderrpri %s\n", stderrpri);
+    fprintf(stderr, "shuffle_cfglog: bad stderrpri %s\n", stderrpri);
     goto err;
   }
 
   shufcfg.mask = (mask) ? strdup(mask) : NULL;
   if (mask && !shufcfg.mask) {
-    fprintf(stderr, "shuffler_cfglog: mask malloc failed\n");
+    fprintf(stderr, "shuffle_cfglog: mask malloc failed\n");
     goto err;
   }
 
   shufcfg.xmask = (xmask) ? strdup(xmask) : NULL;
   if (xmask && !shufcfg.xmask) {
-    fprintf(stderr, "shuffler_cfglog: xmask malloc failed\n");
+    fprintf(stderr, "shuffle_cfglog: xmask malloc failed\n");
     goto err;
   }
 
@@ -152,7 +152,7 @@ int shuffler_cfglog(int max_xtra_rank, const char *defpri,
     shufcfg.lfbaselen = strlen(logfile);
     tmpbuf = (char *)calloc(shufcfg.lfbaselen + 16, 1);   /* zero fills */
     if (tmpbuf == NULL) {
-      fprintf(stderr, "shuffler_cfglog: malloc tmpbuf failed?\n");
+      fprintf(stderr, "shuffle_cfglog: malloc tmpbuf failed?\n");
       goto err;
     }
     shufcfg.logfile = tmpbuf;  /* we'll add the rank later */
@@ -174,11 +174,11 @@ err:
 }
 
 /*
- * shuffler_openlog: start the log
+ * shuffle_openlog: start the log
  *
  * @param myrank the current process' rank
  */
-static void shuffler_openlog(int myrank) {
+static void shuffle_openlog(int myrank) {
   int stderrlog, am_xtra, rv;
   char *lfile, *usemask;
 
@@ -201,7 +201,7 @@ static void shuffler_openlog(int myrank) {
   rv = shuf::mlog_open("shuf", SHUF_MAXFAC, shufcfg.defpri, shufcfg.stderrpri,
                        lfile, shufcfg.msgbufsz, stderrlog|MLOG_LOGPID, 0);
   if (rv < 0) {
-    fprintf(stderr, "shuffler_openlog: failed!  log disabled\n");
+    fprintf(stderr, "shuffle_openlog: failed!  log disabled\n");
     shufcfg.on = 0;
     goto done;
   }
@@ -210,7 +210,7 @@ static void shuffler_openlog(int myrank) {
       shuf::mlog_namefacility(UTIL_MLOG, "UTIL", NULL) < 0 ||
       shuf::mlog_namefacility(CLNT_MLOG, "CLNT", NULL) < 0 ||
       shuf::mlog_namefacility(DLIV_MLOG, "DLIV", NULL) < 0) {
-    fprintf(stderr, "shuffler_namefac: failed!  log disabled\n");
+    fprintf(stderr, "shuffle_namefac: failed!  log disabled\n");
     goto done;
   }
 
@@ -228,9 +228,9 @@ done:
 }
 
 /*
- * shuffler_closelog: end the log
+ * shuffle_closelog: end the log
  */
-static void shuffler_closelog() {
+static void shuffle_closelog() {
   if (shufcfg.on)
     shuf::mlog_close();
 }
@@ -332,6 +332,41 @@ static void museprobe_print(struct museprobe *up, const char *tag, int n) {
       "%s%s: minflt=%ld, majflt=%ld, inb=%ld, oub=%ld, vcw=%ld, ivcw=%ld\n",
       nstr, tag, nminflt, nmajflt, ninblock, noublock, nnvcsw, nnivcsw);
 }
+
+/* print mercury-progressor stats */
+void mprogstats_print(progressor_handle_t *hand, const char *tag, int n) {
+    char nstr[32];
+    struct progressor_stats ps;
+
+    if (n >= 0) {
+        snprintf(nstr, sizeof(nstr), "%d: ", n);
+    } else {
+        nstr[0] = '\0';
+    }
+
+    if (mercury_progressor_getstats(hand, &ps) != HG_SUCCESS) {
+        mlog(SHUF_WARN, "%s%s: mercury_progressor_getstats failed!", nstr, tag);
+        return;
+    }
+
+    mlog(SHUF_NOTE, "%s%s: network thread idle (nprogress=%"
+                     PRId64 ", ntrigger=%" PRId64 ")", nstr, tag,
+                     ps.nprogress, ps.ntrigger);
+    mlog(SHUF_NOTE, "%s%s: times: wall=%f, usr=%f, sys=%f (secs)", nstr, tag,
+         ps.runtime.tv_sec + (ps.runtime.tv_usec / 1000000.0),
+         ps.runusage.ru_utime.tv_sec +
+                               (ps.runusage.ru_utime.tv_usec / 1000000.0),
+         ps.runusage.ru_stime.tv_sec +
+                               (ps.runusage.ru_stime.tv_usec / 1000000.0));
+    mlog(SHUF_NOTE,
+         "%s%s: minflt=%ld, majflt=%ld, inb=%ld, oub=%ld, vcw=%ld, ivcw=%ld",
+         nstr, tag, ps.runusage.ru_minflt, ps.runusage.ru_majflt,
+         ps.runusage.ru_inblock, ps.runusage.ru_oublock,
+         ps.runusage.ru_nvcsw, ps.runusage.ru_nivcsw);
+    mlog(SHUF_NOTE, "%s%s: maxrss=%ld (KiB)", nstr, tag,
+         ps.runusage.ru_maxrss);
+}
+
 /*
  * end usage state
  */
@@ -376,13 +411,13 @@ static void init_cond_timedwait(struct cond_timedwait *ctw, int timeout,
 /*
  * do_cond_timedwait: do a timed wait operation
  *
- * @param sh our shuffler (in case we need to dump state)
+ * @param sh our shuffle (in case we need to dump state)
  * @param ccv our cond var
  * @param cmu our mutex
  * @param ctw the timedwait state
  * @return 0 on success, otherwise an error (mimics pthreads API)
  */
-static int do_cond_timedwait(struct shuffler *sh, pthread_cond_t *ccv,
+static int do_cond_timedwait(struct shuffle *sh, pthread_cond_t *ccv,
                              pthread_mutex_t *cmu,
                              struct cond_timedwait *ctw) {
   int rv;
@@ -398,7 +433,7 @@ static int do_cond_timedwait(struct shuffler *sh, pthread_cond_t *ccv,
 
   ctw->ctw_timedout = 1;
   notify(SHUF_CRIT, "do_cond_timedwait: TIMEOUT (%s)\n", ctw->ctw_msg);
-  shuffler_statedump(sh, 1);
+  shuffle_statedump(sh, 1);
   if (ctw->ctw_abort)
     abort();
   return(pthread_cond_wait(ccv, cmu));  /* revert to cond_wait */
@@ -408,7 +443,7 @@ static int do_cond_timedwait(struct shuffler *sh, pthread_cond_t *ccv,
  * counters: can be compiled in or out as needed
  */
 
-#ifdef SHUFFLER_COUNT
+#ifdef SHUFFLE_COUNT
 #define shufadd(X,V)  do { (*X) += (V); } while (0)
 #define shufcount(X)  do { (*X)++; } while (0)
 #define shufcounta(X) do { acnt32_incr(X); } while (0)
@@ -427,13 +462,12 @@ static int do_cond_timedwait(struct shuffler *sh, pthread_cond_t *ccv,
 /*
  * RPC handler registered with mercury
  */
-static hg_return_t shuffler_rpchand(hg_handle_t handle);
+static hg_return_t shuffle_rpchand(hg_handle_t handle);
 
 /*
- * thread main routines for network and delivery
+ * thread main routine for delivery
  */
 static void *delivery_main(void *arg);
-static void *network_main(void *arg);
 
 /*
  * other prototypes
@@ -445,38 +479,38 @@ static bool append_req_to_locked_outqueue(struct outset *oset,
                                           struct request_queue *tosendq,
                                           struct output **newoutputp,
                                           bool flushnow);
-static hg_return_t aquire_flush(struct shuffler *sh, struct flush_op *fop,
+static hg_return_t aquire_flush(struct shuffle *sh, struct flush_op *fop,
                                 int type, struct outset *oset);
-static void clean_qflush(struct shuffler *sh, struct outset *oset);
+static void clean_qflush(struct shuffle *sh, struct outset *oset);
 static void done_oq_flush(struct outqueue *oq);
-static void drop_curflush(struct shuffler *sh);
+static void drop_curflush(struct shuffle *sh);
 static hg_return_t forw_cb(const struct hg_cb_info *cbi);
 static void forw_start_next(struct outqueue *oq, struct output *oput);
 static hg_return_t forward_reqs_now(struct request_queue *tosendq,
-                                    struct shuffler *sh, struct outset *oset,
+                                    struct shuffle *sh, struct outset *oset,
                                     struct outqueue *oq, struct output *oput);
-static int purge_reqs(struct shuffler *sh);
-static int purge_reqs_outset(struct shuffler *sh, struct outset *oset);
-static hg_return_t req_parent_init(struct shuffler *sh,
+static int purge_reqs(struct shuffle *sh);
+static int purge_reqs_outset(struct shuffle *sh, struct outset *oset);
+static hg_return_t req_parent_init(struct shuffle *sh,
                                    struct req_parent **parentp,
                                    struct request *req, hg_handle_t input,
                                    rpcin_t *rpcin);
-static hg_return_t req_to_self(struct shuffler *sh, struct request *req,
+static hg_return_t req_to_self(struct shuffle *sh, struct request *req,
                                hg_handle_t input, rpcin_t *rpcin,
                                struct req_parent **parentp);
-static hg_return_t req_via_mercury(struct shuffler *sh, struct outset *oset,
+static hg_return_t req_via_mercury(struct shuffle *sh, struct outset *oset,
                                    struct outqueue *oq, struct request *req,
                                    hg_handle_t input, rpcin_t *rpcin,
                                    struct req_parent **parentp);
-static void parent_dref_stopwait(struct shuffler *sh, struct req_parent *parent,
+static void parent_dref_stopwait(struct shuffle *sh, struct req_parent *parent,
                                  int abort);
-static void parent_stopwait(struct shuffler *sh, struct req_parent *parent,
+static void parent_stopwait(struct shuffle *sh, struct req_parent *parent,
                             int abort);
-static hg_return_t shuffler_desthand_cb(const struct hg_cb_info *cbi);
-static hg_return_t shuffler_respond_cb(const struct hg_cb_info *cbi);
-static int start_threads(struct shuffler *sh);
-static void stop_threads(struct shuffler *sh);
-static void start_qflush(struct shuffler *sh, struct outset *oset,
+static hg_return_t shuffle_desthand_cb(const struct hg_cb_info *cbi);
+static hg_return_t shuffle_respond_cb(const struct hg_cb_info *cbi);
+static int start_threads(struct shuffle *sh);
+static void stop_threads(struct shuffle *sh);
+static void start_qflush(struct shuffle *sh, struct outset *oset,
                          struct outqueue *oq);
 
 /*
@@ -619,24 +653,24 @@ done:
  */
 static const char *outset_typstr(int type) {
   switch (type) {
-    case SHUFFLER_REMOTE_QUEUES: return("remote");
-    case SHUFFLER_ORIGIN_QUEUES: return("orgin");
-    case SHUFFLER_RELAY_QUEUES:  return("relay");
+    case SHUFFLE_REMOTE_QUEUES: return("remote");
+    case SHUFFLE_ORIGIN_QUEUES: return("orgin");
+    case SHUFFLE_RELAY_QUEUES:  return("relay");
   }
   return("UNKNOWN!");
 }
 
 /*
- * shuffler_outset_discard: free anything that was attached to an outset
+ * shuffle_outset_discard: free anything that was attached to an outset
  * (e.g. for error recovery, shutdown)
  *
  * @param oset the outset to clean
  */
-static void shuffler_outset_discard(struct outset *oset) {
+static void shuffle_outset_discard(struct outset *oset) {
   struct shufsend_waiter *sw;
   std::map<hg_addr_t,struct outqueue *>::iterator oqit;
   struct outqueue *oq;
-  mlog(UTIL_CALL, "shuffler_outset_discard %s", outset_typstr(oset->settype));
+  mlog(UTIL_CALL, "shuffle_outset_discard %s", outset_typstr(oset->settype));
 
   /* wipe out any client threads blocked on shufsendq */
   pthread_mutex_lock(&oset->os_rpclimitlock);
@@ -662,44 +696,44 @@ static void shuffler_outset_discard(struct outset *oset) {
 }
 
 /*
- * shuffler_init_outset: init an outset (but does not start network thread)
+ * shuffle_init_outset: init an outset (but does not start network svc)
  *
  * @param oset the structure we are init'ing
  * @param maxoqrpc max# of outstanding RPCs allowed on one oq
  * @param buftarget try and collect at least this many bytes into batch
- * @param sndrpclimit block shuffler_send() if past limit
- * @param shuf the shuffler that owns this oset
- * @param hgt the mercury thread that will service us
+ * @param sndrpclimit block shuffle_enqueue() if past limit
+ * @param shuf the shuffle that owns this oset
+ * @param hgp the mercury progressor that will service us
  * @param nit nexus iterator for map
  * @return -1 on error, 0 on success
  */
-static int shuffler_init_outset(struct outset *oset, int maxoqrpc,
+static int shuffle_init_outset(struct outset *oset, int maxoqrpc,
                                 int buftarget, int sndrpclimit,
-                                shuffler_t shuf,
-                                struct hgthread *hgt, nexus_iter_t nit) {
+                                shuffle_t shuf,
+                                struct hgprogress *hgp, nexus_iter_t nit) {
   int stype;
   hg_addr_t ha;
   struct outqueue *oq;
 
   if (oset == &shuf->remoteq) {
-    stype = SHUFFLER_REMOTE_QUEUES;
+    stype = SHUFFLE_REMOTE_QUEUES;
   } else if (oset == &shuf->local_orq) {
-    stype = SHUFFLER_ORIGIN_QUEUES;
+    stype = SHUFFLE_ORIGIN_QUEUES;
   } else if (oset == &shuf->local_rlq) {
-    stype = SHUFFLER_RELAY_QUEUES;
+    stype = SHUFFLE_RELAY_QUEUES;
   } else {
     notify(SHUF_CRIT, "init outset with mistmatched pointers?!");
     abort();    /* should never happen */
   }
 
-  mlog(UTIL_CALL, "shuffler_init_outset type=%s", outset_typstr(stype));
+  mlog(UTIL_CALL, "shuffle_init_outset type=%s", outset_typstr(stype));
 
   oset->maxoqrpc = maxoqrpc;
   oset->buftarget = buftarget;
   oset->settype = stype;
   oset->shufsend_rpclimit = sndrpclimit;
   oset->shuf = shuf;
-  oset->myhgt = hgt;
+  oset->myhgp = hgp;
   if (pthread_mutex_init(&oset->os_rpclimitlock, NULL) != 0) {
     notify(SHUF_CRIT, "init outset limit lock mutex init failed");
     return(-1);
@@ -750,61 +784,73 @@ static int shuffler_init_outset(struct outset *oset, int maxoqrpc,
 
 err:
   mlog(UTIL_ERR, "init_outset: failed (type=%s)!", outset_typstr(stype));
-  shuffler_outset_discard(oset);
+  shuffle_outset_discard(oset);
   return(-1);
 }
 
 /*
- * shuffler_init_hgthread: init the hg thread state structure.
- * allocates rpcid, but does not start threads.
+ * shuffle_init_hgprogress: init the hg progress state structure.
+ * allocates rpcid, but does not start service.
  *
- * @param sh the shuffler we are working on
- * @param hgt the structure to init
- * @param cls hg class to use
- * @param ctx hc context to use
+ * @param sh the shuffle we are working on
+ * @param hgp the structure to init
+ * @param phand mercury progressor handle to use
  * @param rpchand rpc handler function (we register it)
  * @return -1 on error, 0 on success
 */
-int shuffler_init_hgthread(struct shuffler *sh, struct hgthread *hgt,
-                           hg_class_t *cls, hg_context_t *ctx,
-                           hg_rpc_cb_t rpchand) {
-  /* XXX: begin single_hgmode hack */
+int shuffle_init_hgprogress(struct shuffle *sh, struct hgprogress *hgp,
+                            progressor_handle_t *phand,
+                            hg_rpc_cb_t rpchand) {
   const char *myfunname = sh->funname;
+  char *alloc_buf = NULL;
+  int sz;
 
-  /* hack a new name for local */
-  if (sh->single_hgmode && hgt == &sh->hgt_local) {
-      myfunname = "3hop-local-hack";   /* XXX: hardwire */
+  /*
+   * if local and remote are sharing the same mercury context, then
+   * we need to modify the function name for one of them so that we
+   * have two distinct rpcids.  this allows us to associate a unique
+   * rpcid for hgprogress struct we are using.
+   */
+  if (sh->single_hgmode && hgp == &sh->hgp_local) {
+      sz = strlen(myfunname) + 1 + 4;  /* add space for \0 and "_loc" */
+      alloc_buf = (char *)malloc(sz);
+      if (!alloc_buf)
+          return(-1);
+      snprintf(alloc_buf, sz, "%s_loc", myfunname);
+      myfunname = alloc_buf;    /* update to "_loc" version */
   }
-  /* XXX: end single_hgmode hack */
 
-  /* zero everything.  setting nrunning to 0 indicates ntask is not valid */
-  memset(hgt, 0, sizeof(*hgt));
-  hgt->hgshuf = sh;
-  hgt->mcls = cls;
-  hgt->mctx = ctx;
+  /* zero everything, sets nrunning to 0. */
+  memset(hgp, 0, sizeof(*hgp));
+  hgp->hgshuf = sh;
+  hgp->mphand = phand;
+  hgp->mcls = mercury_progressor_hgclass(phand);
+  hgp->mctx = mercury_progressor_hgcontext(phand);
 
   /*
    * register with mercury.  XXX: HG_Register_name() can't fail.
    * there is no API to unregister an RPC other than shutting down
-   * mercury, so hopefully HG_Register_data() can't fail...
+   * mercury, so hopefully when we call HG_Register_data() later
+   * it won't fail...
    */
-  hgt->rpcid = HG_Register_name(cls, myfunname,
+  hgp->rpcid = HG_Register_name(hgp->mcls, myfunname,
                  hg_proc_rpcin_t, hg_proc_rpcout_t,  rpchand);
-  if (HG_Register_data(cls, hgt->rpcid, hgt, NULL) != HG_SUCCESS)
-    return(-1);
+
+  if (alloc_buf)
+      free(alloc_buf);
 
   return(0);
 }
 
 /*
- * shuffler_flush_discard: discard allocated state for flush mgt
+ * shuffle_flush_discard: discard allocated state for flush mgt
  *
- * @param sh shuffler previously init'd with shuffler_init_flush
+ * @param sh shuffle previously init'd with shuffle_init_flush
  */
-static void shuffler_flush_discard(struct shuffler *sh) {
+static void shuffle_flush_discard(struct shuffle *sh) {
   int nc = 0;
   struct flush_op *fop;
-  mlog(UTIL_CALL, "shuffler_flush_discard");
+  mlog(UTIL_CALL, "shuffle_flush_discard");
 
   /* kill any pending flush ops (hopefully none) */
   pthread_mutex_lock(&sh->flushlock);
@@ -824,20 +870,20 @@ static void shuffler_flush_discard(struct shuffler *sh) {
 
   if (nc) {
     notify(UTIL_WARN|MLOG_STDERR,
-           "shuffler: flush_discard canceled %d flush op(s)", nc);
+           "shuffle: flush_discard canceled %d flush op(s)", nc);
     sleep(3);   /* yield to be safe since destroy flushlock is next */
   }
   pthread_mutex_destroy(&sh->flushlock);
 }
 
 /*
- * shuffler_init_flush: init flush op management fields in shuffler
+ * shuffle_init_flush: init flush op management fields in shuffle
  *
- * @param sh shuffler to init
+ * @param sh shuffle to init
  * @return success, normally
  */
-static hg_return_t shuffler_init_flush(struct shuffler *sh) {
-  mlog(UTIL_CALL, "shuffler_init_flush");
+static hg_return_t shuffle_init_flush(struct shuffle *sh) {
+  mlog(UTIL_CALL, "shuffle_init_flush");
   XSIMPLEQ_INIT(&sh->fpending);
   sh->curflush = NULL;
   sh->flushdone = 0;
@@ -850,16 +896,23 @@ static hg_return_t shuffler_init_flush(struct shuffler *sh) {
 }
 
 /*
- * shuffler_init: init's the shuffler layer.
+ * shuffle_opts_init: init all values in an opts structures to the defaults
  */
-shuffler_t shuffler_init(nexus_ctx_t nxp, char *funname,
-           int localsenderlimit, int remotesenderlimit,
-           int lomaxrpc, int lobuftarget, int lrmaxrpc, int lrbuftarget,
-           int rmaxrpc, int rbuftarget, int deliverq_max,
-           int deliverq_threshold, shuffler_deliver_t delivercb) {
+void shuffle_opts_init(struct shuffle_opts *sopt) {
+  memset(sopt, 0, sizeof(*sopt));
+  sopt->lomaxrpc = sopt->lrmaxrpc = sopt->rmaxrpc = 1;
+  sopt->deliverq_max = 1;
+}
+
+/*
+ * shuffle_init: inits the shuffle layer.
+ */
+shuffle_t shuffle_init(nexus_ctx_t nxp, char *funname,
+                       shuffle_deliverfn_t delivercb,
+                       struct shuffle_opts *so) {
   int64_t mask, worldsize;
   int myrank, lcv, rv;
-  shuffler_t sh;
+  shuffle_t sh;
   nexus_iter_t nit;
 
   /*
@@ -869,28 +922,31 @@ shuffler_t shuffler_init(nexus_ctx_t nxp, char *funname,
   mask = ~0x7fffffff;
   worldsize = nexus_global_size(nxp);  /* largest possible rank */
   if (worldsize & mask) {
-    fprintf(stderr, "shuffler_init: rank bigger than int32_t?\n");
+    fprintf(stderr, "shuffle_init: rank bigger than int32_t?\n");
     abort();
   }
 
   myrank = nexus_global_rank(nxp);
-  shuffler_openlog(myrank);
+  shuffle_openlog(myrank);
 
   mlog(SHUF_CALL,
-       "shuffler_init maxrpc(lo/lr/r)=%d/%d/%d targ(lo/lr/r)=%d/%d/%d",
-       lomaxrpc, lrmaxrpc, rmaxrpc, lobuftarget, lrbuftarget,
-       rbuftarget);
-  mlog(SHUF_CALL, "sndrlimit(l/r)=%d/%d dqmax/th=%d/%d",
-       localsenderlimit, remotesenderlimit, deliverq_max, deliverq_threshold);
+       "shuffle_init maxrpc(lo/lr/r)=%d/%d/%d targ(lo/lr/r)=%d/%d/%d",
+       so->lomaxrpc, so->lrmaxrpc, so->rmaxrpc, so->lobuftarget,
+       so->lrbuftarget, so->rbuftarget);
+  mlog(SHUF_CALL, "sndrlimit(l/r)=%d/%d dqmax/th=%d/%d", so->localsenderlimit,
+       so->remotesenderlimit, so->deliverq_max, so->deliverq_threshold);
 
-  sh = new shuffler;    /* aborts w/std::bad_alloc on failure */
+  sh = new shuffle;    /* aborts w/std::bad_alloc on failure */
 
   /* make sure these oqflush_counters are not pointing at garbage */
   sh->local_orq.oqflush_counter = NULL;
   sh->local_rlq.oqflush_counter = NULL;
   sh->remoteq.oqflush_counter = NULL;
 
-  sh->single_hgmode = 0;       /* XXX */
+  /* are local and remote sharing the same hg context? */
+  sh->single_hgmode =
+    mercury_progressor_hgcontext(nexus_localprogressor(nxp)) ==
+    mercury_progressor_hgcontext(nexus_remoteprogressor(nxp));
   sh->grank = myrank;
   for (lcv = 0 ; lcv < FLUSH_NTYPES ; lcv++) {
     shufzero(&sh->cntflush[lcv]);
@@ -915,40 +971,40 @@ shuffler_t shuffler_init(nexus_ctx_t nxp, char *funname,
 
   nit = nexus_iter(nxp, 1);
   if (nit == NULL) goto err;
-  rv = shuffler_init_outset(&sh->local_orq, lomaxrpc, lobuftarget,
-                            localsenderlimit, sh, &sh->hgt_local, nit);
+  rv = shuffle_init_outset(&sh->local_orq, so->lomaxrpc, so->lobuftarget,
+                           so->localsenderlimit, sh, &sh->hgp_local, nit);
   nexus_iter_free(&nit);
   if (rv < 0) goto err;
 
   nit = nexus_iter(nxp, 1);
   if (nit == NULL) goto err;
-  rv = shuffler_init_outset(&sh->local_rlq, lrmaxrpc, lrbuftarget,
-                            0, sh, &sh->hgt_local, nit);
+  rv = shuffle_init_outset(&sh->local_rlq, so->lrmaxrpc, so->lrbuftarget,
+                           0, sh, &sh->hgp_local, nit);
   nexus_iter_free(&nit);
   if (rv < 0) goto err;
 
   nit = nexus_iter(nxp, 0);
   if (nit == NULL) goto err;
-  rv = shuffler_init_outset(&sh->remoteq, rmaxrpc, rbuftarget,
-                            remotesenderlimit, sh, &sh->hgt_remote, nit);
+  rv = shuffle_init_outset(&sh->remoteq, so->rmaxrpc, so->rbuftarget,
+                           so->remotesenderlimit, sh, &sh->hgp_remote, nit);
   nexus_iter_free(&nit);
   if (rv < 0) goto err;
   acnt32_set(sh->seqsrc, 0);
 
-  /* XXX: check mode for mercury workaround */
-  sh->single_hgmode = (nexus_hgcontext_local(nxp) ==
-                       nexus_hgcontext_remote(nxp));
-
-  /* init hg thread state (but don't start yet).  allocs hg rpcid */
-  rv = shuffler_init_hgthread(sh, &sh->hgt_local, nexus_hgclass_local(nxp),
-                              nexus_hgcontext_local(nxp), shuffler_rpchand);
+  /*
+   * init hg progress state (but don't start yet).  allocs hg rpcid.
+   * since we are using nxp (nexus), it can't be shutdown before us.
+   * so it is safe to use nexus' progressor handle: no need to duphandle().
+   */
+  rv = shuffle_init_hgprogress(sh, &sh->hgp_local,
+                               nexus_localprogressor(nxp), shuffle_rpchand);
   if (rv < 0) goto err;
-  rv = shuffler_init_hgthread(sh, &sh->hgt_remote, nexus_hgclass_remote(nxp),
-                              nexus_hgcontext_remote(nxp), shuffler_rpchand);
+  rv = shuffle_init_hgprogress(sh, &sh->hgp_remote,
+                                nexus_remoteprogressor(nxp), shuffle_rpchand);
   if (rv < 0) goto err;
 
-  sh->deliverq_max = deliverq_max;
-  sh->deliverq_threshold = deliverq_threshold;
+  sh->deliverq_max = so->deliverq_max;
+  sh->deliverq_threshold = so->deliverq_threshold;
   sh->delivercb = delivercb;
   if (pthread_mutex_init(&sh->deliverlock, NULL) != 0)
     goto err;
@@ -959,7 +1015,7 @@ shuffler_t shuffler_init(nexus_ctx_t nxp, char *funname,
   sh->dflush_counter = 0;
   sh->dshutdown = sh->drunning = 0;
 
-  if (shuffler_init_flush(sh) != HG_SUCCESS) {
+  if (shuffle_init_flush(sh) != HG_SUCCESS) {
     pthread_mutex_destroy(&sh->deliverlock);
     pthread_cond_destroy(&sh->delivercv);
     goto err;
@@ -969,91 +1025,107 @@ shuffler_t shuffler_init(nexus_ctx_t nxp, char *funname,
   if (start_threads(sh) != 0) {
     pthread_mutex_destroy(&sh->deliverlock);
     pthread_cond_destroy(&sh->delivercv);
-    shuffler_flush_discard(sh);
+    shuffle_flush_discard(sh);
     goto err;
+  }
+
+  /* register data to enable service */
+  if (HG_Register_data(sh->hgp_local.mcls, sh->hgp_local.rpcid,
+                       &sh->hgp_local, NULL) != HG_SUCCESS ||
+      HG_Register_data(sh->hgp_remote.mcls, sh->hgp_remote.rpcid,
+                       &sh->hgp_remote, NULL) != HG_SUCCESS) {
+
+    /*
+     * HG_Register_data() unlikely to fail, since we have already
+     * successfully called HG_Register_name().  we are far enough
+     * along that we can just call shuffle_shutdown() to err out.
+     */
+    shuffle_shutdown(sh);
+    return(NULL);
   }
 
   return(sh);
 
 err:
-  mlog(SHUF_D1, "shuffler_init: FAILED!!!");
-  shuffler_outset_discard(&sh->local_orq);     /* ensures maps are empty */
-  shuffler_outset_discard(&sh->local_rlq);
-  shuffler_outset_discard(&sh->remoteq);
+  mlog(SHUF_D1, "shuffle_init: FAILED!!!");
+  shuffle_outset_discard(&sh->local_orq);     /* ensures maps are empty */
+  shuffle_outset_discard(&sh->local_rlq);
+  shuffle_outset_discard(&sh->remoteq);
   if (sh->seqsrc) acnt32_free(&sh->seqsrc);
   if (sh->funname) free(sh->funname);
   delete sh;
-  shuffler_closelog();
+  shuffle_closelog();
   return(NULL);
 }
 
 /*
- * start_threads: attempt to start our three worker threads
+ * start_threads: attempt to start delivery and progress
  *
- * @param sh the shuffler we are starting
+ * @param sh the shuffle we are starting
  * @return 0 on success, -1 on error
  */
-static int start_threads(struct shuffler *sh) {
+static int start_threads(struct shuffle *sh) {
   int rv;
   mlog(SHUF_CALL, "start_threads called");
 
   /* start delivery thread */
   rv = pthread_create(&sh->dtask, NULL, delivery_main, (void *)sh);
-   if (rv != 0) {
-     notify(SHUF_CRIT, "shuffler:start_threads: delivery_main failed");
-     stop_threads(sh);
-     return(-1);
-   }
-   sh->drunning = 1;
-
-   /* start local na+sm thread */
-  rv = pthread_create(&sh->hgt_local.ntask, NULL,
-                      network_main, (void *)&sh->hgt_local);
   if (rv != 0) {
-     notify(SHUF_CRIT, "shuffler:start_threads: na+sm main failed");
+    notify(SHUF_CRIT, "shuffle:start_threads: delivery_main failed");
+    stop_threads(sh);
+    return(-1);
+  }
+  sh->drunning = 1;
+
+  /* start local na+sm processing */
+  if (mercury_progressor_needed(sh->hgp_local.mphand) != HG_SUCCESS) {
+    notify(SHUF_CRIT, "shuffle:start_threads: na+sm main needed failed");
+    stop_threads(sh);
+    return(-1);
+
+  }
+  sh->hgp_local.nrunning = 1;
+
+  /* start remote network processing */
+  if (mercury_progressor_needed(sh->hgp_remote.mphand) != HG_SUCCESS) {
+     notify(SHUF_CRIT, "shuffle:start_threads: net main needed failed");
      stop_threads(sh);
      return(-1);
   }
-  sh->hgt_local.nrunning = 1;
-
-   /* start remote network thread */
-  rv = pthread_create(&sh->hgt_remote.ntask, NULL,
-                      network_main, (void *)&sh->hgt_remote);
-  if (rv != 0) {
-     notify(SHUF_CRIT, "shuffler:start_threads: net main failed");
-     stop_threads(sh);
-     return(-1);
-  }
-  sh->hgt_remote.nrunning = 1;
+  sh->hgp_remote.nrunning = 1;
 
   mlog(SHUF_CALL, "start_threads SUCCESS!");
   return(0);
 }
 
 /*
- * stop_threads: stop all our worker threads.  this will prevent
- * any requests from progressing, so clear out the queues.
+ * stop_threads: stop delivery thread and progress.
+ * this will prevent any requests from progressing, so clear out the queues.
  *
- * @param sh shuffler
+ * @param sh shuffle
  */
-static void stop_threads(struct shuffler *sh) {
+static void stop_threads(struct shuffle *sh) {
   int stranded;
   mlog(SHUF_CALL, "stop_threads");
 
   /* stop network */
-  if (sh->hgt_remote.nrunning) {
-    mlog(SHUF_D1, "join remote");
-    sh->hgt_remote.nshutdown = 1;
-    pthread_join(sh->hgt_remote.ntask, NULL);
-    sh->hgt_remote.nshutdown = 0;
+  if (sh->hgp_remote.nrunning) {
+    mlog(SHUF_D1, "idle remote");
+    sh->hgp_remote.nshutdown = 1;
+    mercury_progressor_idle(sh->hgp_remote.mphand);
+    mprogstats_print(sh->hgp_remote.mphand, "remote", -1);
+    sh->hgp_remote.nrunning = 0;
+    sh->hgp_remote.nshutdown = 0;
   }
 
   /* stop na+sm */
-  if (sh->hgt_local.nrunning) {
-    mlog(SHUF_D1, "join local");
-    sh->hgt_local.nshutdown = 1;
-    pthread_join(sh->hgt_local.ntask, NULL);
-    sh->hgt_local.nshutdown = 0;
+  if (sh->hgp_local.nrunning) {
+    mlog(SHUF_D1, "idle local");
+    sh->hgp_local.nshutdown = 1;
+    mercury_progressor_idle(sh->hgp_local.mphand);
+    mprogstats_print(sh->hgp_local.mphand, "local", -1);
+    sh->hgp_local.nrunning = 0;
+    sh->hgp_local.nshutdown = 0;
   }
 
   /* stop delivery */
@@ -1070,7 +1142,7 @@ static void stop_threads(struct shuffler *sh) {
   /* look for stranded requests and warn about them */
   stranded = purge_reqs(sh);
   if (stranded > 0) {
-    notify(SHUF_CRIT, "shuffler stop_threads: stranded %d reqs", stranded);
+    notify(SHUF_CRIT, "shuffle stop_threads: stranded %d reqs", stranded);
     shufadd(&sh->cntstranded, stranded);
   }
 }
@@ -1081,15 +1153,15 @@ static void stop_threads(struct shuffler *sh) {
  * the system and clear them out.  return number of reqs we cleared
  * (hopefully zero).
  *
- * @param sh the shuffler to purge
+ * @param sh the shuffle to purge
  * @return number of items that got purged
  */
-static int purge_reqs(struct shuffler *sh) {
+static int purge_reqs(struct shuffle *sh) {
   int rv = 0;
   struct request *req;
   mlog(SHUF_CALL, "purge_reqs");
 
-  if (sh->drunning || sh->hgt_local.nrunning || sh->hgt_remote.nrunning) {
+  if (sh->drunning || sh->hgp_local.nrunning || sh->hgp_remote.nrunning) {
     notify(SHUF_CRIT, "ERROR!  purge_reqs called on active system?!!?");
     abort();   /* should never happen */
   }
@@ -1103,8 +1175,8 @@ static int purge_reqs(struct shuffler *sh) {
     rv++;
   }
   while (!sh->deliverq.empty()) {
-    req = sh->dwaitq.front();
-    sh->dwaitq.pop_front();
+    req = sh->deliverq.front();
+    sh->deliverq.pop_front();
     free(req);
     rv++;
   }
@@ -1123,11 +1195,11 @@ static int purge_reqs(struct shuffler *sh) {
  * the threads should have been stopped prior to running this (so we are
  * not expecting concurrent access while we are tearing this down).
  *
- * @param sh the shuffler oset belongs to
+ * @param sh the shuffle oset belongs to
  * @param oset set to purge
  * @return the number of stranded reqs in the outset
  */
-static int purge_reqs_outset(struct shuffler *sh, struct outset *oset) {
+static int purge_reqs_outset(struct shuffle *sh, struct outset *oset) {
   int rv = 0;
   std::map<hg_addr_t,struct outqueue *>::iterator it;
   struct outqueue *oq;
@@ -1190,10 +1262,10 @@ static int purge_reqs_outset(struct shuffler *sh, struct outset *oset) {
  * block our network threads because of it (since it would stop
  * traffic that we are a REP for).
  *
- * @param arg void* pointer to our shuffler
+ * @param arg void* pointer to our shuffle
  */
 static void *delivery_main(void *arg) {
-  struct shuffler *sh = (struct shuffler *)arg;
+  struct shuffle *sh = (struct shuffle *)arg;
   struct request *req;
   struct req_parent *parent;
   struct museprobe delivery_use;
@@ -1293,11 +1365,11 @@ static void *delivery_main(void *arg) {
  * parent_dref_stopwait: drop parent reference count and stop waiting
  * if we've dropped the last reference
  *
- * @param sh our shuffler
+ * @param sh our shuffle
  * @param parent waiting parent of request that is no longer waiting
  * @param abort cancels further processing of parent (e.g. for error handling)
  */
-static void parent_dref_stopwait(struct shuffler *sh, struct req_parent *parent,
+static void parent_dref_stopwait(struct shuffle *sh, struct req_parent *parent,
                                  int abort) {
   int nw;
 
@@ -1323,7 +1395,6 @@ static void parent_dref_stopwait(struct shuffler *sh, struct req_parent *parent,
   parent_stopwait(sh, parent, abort);
 }
 
-
 /*
  * parent_stopwait: we had a req on a waitq (i.e. a parent waiting on it)
  * and it finished.  we removed the req from the waitq and dropped the
@@ -1332,11 +1403,11 @@ static void parent_dref_stopwait(struct shuffler *sh, struct req_parent *parent,
  *
  * NOTE: caller must ensure that assume that nrefs is < 1
  *
- * @param sh our shuffler
+ * @param sh our shuffle
  * @param parent waiting parent of request that is no longer waiting
  * @param abort cancels further processing of parent (e.g. for error handling)
  */
-static void parent_stopwait(struct shuffler *sh, struct req_parent *parent,
+static void parent_stopwait(struct shuffle *sh, struct req_parent *parent,
                             int abort) {
   rpcout_t reply;
   hg_return_t rv;
@@ -1395,7 +1466,7 @@ static void parent_stopwait(struct shuffler *sh, struct req_parent *parent,
   if (!abort) {
     mlog(SHUF_D1, "parent_stopwait: RPC respond %d %p R%d-%d",
          reply.ret, parent, parent->rpcin_forwrank, parent->rpcin_seq);
-    rv = HG_Respond(parent->input, shuffler_respond_cb, parent, &reply);
+    rv = HG_Respond(parent->input, shuffle_respond_cb, parent, &reply);
   } else {
     rv = HG_CANCELED;
   }
@@ -1405,15 +1476,15 @@ static void parent_stopwait(struct shuffler *sh, struct req_parent *parent,
     if (!abort) {
       notify(SHUF_WARN, "parent_stopwait: %p reply failed %d!", parent, rv);
     }
-    /* note: we know shuffler_respond_cb() only looks at cbi.arg */
+    /* note: we know shuffle_respond_cb() only looks at cbi.arg */
     cbi.arg = parent;
-    rv = shuffler_respond_cb(&cbi);
+    rv = shuffle_respond_cb(&cbi);
     /* ignore return value */
   }
 }
 
 /*
- * shuffler_respond_cb: we've either send a response or we tried
+ * shuffle_respond_cb: we've either send a response or we tried
  * to send a response and failed.  either way, we need to do final
  * cleanup.  note that we only use the field cbi->arg in cbi (in
  * the failure case we are getting a fake cbi, see above).
@@ -1421,9 +1492,9 @@ static void parent_stopwait(struct shuffler *sh, struct req_parent *parent,
  * @param cbi the arg for the callback
  * @return success
  */
-static hg_return_t shuffler_respond_cb(const struct hg_cb_info *cbi) {
+static hg_return_t shuffle_respond_cb(const struct hg_cb_info *cbi) {
   struct req_parent *parent = (struct req_parent *)cbi->arg;
-  mlog(SHUF_CALL, "shuffler_respond_cb parent=%p", parent);
+  mlog(SHUF_CALL, "shuffle_respond_cb parent=%p", parent);
 
   /*
    * XXX: if we want to cache a list of free parent structures,
@@ -1435,68 +1506,6 @@ static hg_return_t shuffler_respond_cb(const struct hg_cb_info *cbi) {
   free(parent);
 
   return(HG_SUCCESS);
-}
-
-/*
- * network_main: network support pthread.   need to call progress to
- * push the network and then trigger to run the callback.  we do this
- * all in one thread (meaning that we shouldn't block in the trigger
- * function, or we won't make progress)
- *
- * @param arg void* pointer to our outset
- */
-
-pthread_mutex_t dummy_lock = PTHREAD_MUTEX_INITIALIZER; /* XXX:single_hgmode */
-
-static void *network_main(void *arg) {
-  struct hgthread *hgt = (struct hgthread *)arg;
-  int is_hgtlocal;
-  hg_return_t ret;
-  unsigned int actual;
-  struct museprobe network_use;
-
-  is_hgtlocal = (hgt == &hgt->hgshuf->hgt_local);
-  museprobe_start(&network_use, MUSEPROBE_THREAD);
-
-  mlog(SHUF_CALL, "network_main start (local=%d)", is_hgtlocal);
-  while (hgt->nshutdown == 0) {
-
-    /* XXX hack for hgtlocal */
-    if (is_hgtlocal && hgt->hgshuf->single_hgmode) {
-        sleep(3);
-        pthread_mutex_lock(&dummy_lock);
-        /* XXXCDC: hack to avoid compiler caching hg->nshutdown in a reg */
-        pthread_mutex_unlock(&dummy_lock);
-        continue;
-    }
-    /* XXX hack for hgtlocal */
-
-    do {
-      ret = HG_Trigger(hgt->mctx, 0, 1, &actual); /* triggers callbacks */
-      shufcount(&hgt->ntrigger);
-    } while (ret == HG_SUCCESS && actual);
-    if (ret != HG_SUCCESS && ret != HG_TIMEOUT) {
-      notify(SHUF_CRIT, "ERROR! calling HG_Trigger returning error: %s(%d)",
-          HG_Error_to_string(ret), int(ret));
-      abort();
-    }
-
-    ret = HG_Progress(hgt->mctx, 100);
-    if (ret != HG_SUCCESS && ret != HG_TIMEOUT) {
-      notify(SHUF_CRIT, "ERROR! calling HG_Progress returning error: %s(%d)",
-              HG_Error_to_string(ret), int(ret));
-      abort();
-    }
-
-    shufcount(&hgt->nprogress);
-  }
-  mlog(SHUF_CALL, "network_main exiting (local=%d)", is_hgtlocal);
-
-  hgt->nrunning = 0;
-  museprobe_end(&network_use);
-  museprobe_print(&network_use, (is_hgtlocal) ? "local" : "remote", -1);
-
-  return(NULL);
 }
 
 /*
@@ -1512,14 +1521,14 @@ static void *network_main(void *arg) {
  * note: "parentp" is a pointer to a pointer.  if *parentp is NULL, we
  * will malloc a new req_parent structure.
  *
- * @param sh the shuffler we are working with
+ * @param sh the shuffle we are working with
  * @param parentp ptr to ptr to the req_parent to init
  * @param req the request that we are waiting on
- * @param input inbound RPC handle (NULL if we are an app shuffler_send())
+ * @param input inbound RPC handle (NULL if we are an app shuffle_enqueue())
  * @param rpcin inbound rpcin_t struct (only used if input != NULL)
  * @return status (normally success)
  */
-static hg_return_t req_parent_init(struct shuffler *sh,
+static hg_return_t req_parent_init(struct shuffle *sh,
                                    struct req_parent **parentp,
                                    struct request *req, hg_handle_t input,
                                    rpcin_t *rpcin) {
@@ -1542,7 +1551,7 @@ static hg_return_t req_parent_init(struct shuffler *sh,
   /* parent should be NULL only if we are handling an inbound RPC in input */
   if (parent == NULL) {
     if (input == NULL) {   /* sanity check: should be an input RPC */
-      notify(SHUF_CRIT, "shuffler: req_parent_init usage error");
+      notify(SHUF_CRIT, "shuffle: req_parent_init usage error");
       return(HG_INVALID_PARAM);  /* should never happen */
     }
     /* NOTE: we only malloc() parent if input != NULL */
@@ -1562,7 +1571,7 @@ static hg_return_t req_parent_init(struct shuffler *sh,
   }
 
   /*
-   * if we are doing a shuffler_send(), then input is NULL and the
+   * if we are doing a shuffle_enqueue(), then input is NULL and the
    * caller has provided us a parent structure (we never malloc it
    * in this case).   we need to init nrefs.  also, we need pcv/pcvlock
    * setup in this case (they are only used when input == NULL).
@@ -1664,11 +1673,11 @@ void drop_reqs(struct request **reqp, struct request_queue *reqq,
  * outset shufsendq and sleep on our cv.  when we can go, we'll be removed
  * from the shufsendq and get a signal on our cv.
  *
- * @param sh our shuffler
+ * @param sh our shuffle
  * @param oset the output set of interest
  * @return sucess if we are ok to continue, otherwise error
  */
-hg_return_t sender_limit(struct shuffler *sh, struct outset *oset) {
+hg_return_t sender_limit(struct shuffle *sh, struct outset *oset) {
   struct shufsend_waiter sw;
   int mutexrv;
   struct cond_timedwait ctw;    /* allocated on stack, that's ok */
@@ -1696,7 +1705,7 @@ hg_return_t sender_limit(struct shuffler *sh, struct outset *oset) {
   }
 
   /* note: still holding oset->os_rpclimitlock */
-  init_cond_timedwait(&ctw, SHUFFLER_TIMEOUT, 1, "sender_limit");
+  init_cond_timedwait(&ctw, SHUFFLE_TIMEOUT, 1, "sender_limit");
   pthread_mutex_lock(&sw.sw_lock);
   sw.sw_status = SHUFSEND_WAIT;
   XTAILQ_INSERT_TAIL(&oset->shufsendq, &sw, sw_q);
@@ -1719,10 +1728,10 @@ hg_return_t sender_limit(struct shuffler *sh, struct outset *oset) {
 }
 
 /*
- * shuffler_send: start the sending of a message via the shuffle.
+ * shuffle_enqueue: start the sending of a message via the shuffle.
  */
-hg_return_t shuffler_send(shuffler_t sh, int dst, uint32_t type,
-                          void *d, uint32_t datalen) {
+hg_return_t shuffle_enqueue(shuffle_t sh, int dst, uint32_t type,
+                            void *d, uint32_t datalen) {
   nexus_ret_t nexus;
   int rank;
   hg_addr_t dstaddr;
@@ -1733,7 +1742,7 @@ hg_return_t shuffler_send(shuffler_t sh, int dst, uint32_t type,
   std::map<hg_addr_t, struct outqueue *>::iterator it;
   struct outqueue *oq;
 
-  mlog(CLNT_CALL, "shuffler_send: dst=%d t=%d dl=%d", dst, type, datalen);
+  mlog(CLNT_CALL, "shuffle_enqueue: dst=%d t=%d dl=%d", dst, type, datalen);
 
   /* first, check to see if send is generally disabled */
   if (sh->disablesend)
@@ -1757,10 +1766,10 @@ hg_return_t shuffler_send(shuffler_t sh, int dst, uint32_t type,
    */
   req = (struct request *) malloc(sizeof(*req) + datalen);
   if (req == NULL) {
-    mlog(CLNT_ERR, "shuffler_send: dst=%d dl=%d malloc failed", dst, datalen);
+    mlog(CLNT_ERR, "shuffle_enqueue: dst=%d dl=%d malloc failed", dst, datalen);
     return(HG_NOMEM_ERROR);
   }
-  mlog(CLNT_D1, "shuffler_send: %d->%d nexus=%d rank=%d addr=%p req=%p",
+  mlog(CLNT_D1, "shuffle_enqueue: %d->%d nexus=%d rank=%d addr=%p req=%p",
        sh->grank, dst, nexus, rank, dstaddr, req);
 
   req->datalen = datalen;
@@ -1777,7 +1786,7 @@ hg_return_t shuffler_send(shuffler_t sh, int dst, uint32_t type,
 
     parent = &parent_store;
     parent->nrefs = NULL;
-    mlog(CLNT_D1, "shuffler_send: req=%p to self", req);
+    mlog(CLNT_D1, "shuffle_enqueue: req=%p to self", req);
     rv = req_to_self(sh, req, NULL, NULL, &parent);  /* can block */
     return(rv);
   }
@@ -1792,13 +1801,13 @@ hg_return_t shuffler_send(shuffler_t sh, int dst, uint32_t type,
    */
   if (nexus != NX_ISLOCAL && nexus != NX_SRCREP && nexus != NX_DESTREP) {
     /* nexus doesn't know dst, return error */
-    mlog(CLNT_ERR, "shuffler_send: bogus nexus value %d", nexus);
+    mlog(CLNT_ERR, "shuffle_enqueue: bogus nexus value %d", nexus);
     return(HG_INVALID_PARAM);
   }
 
   /*
    * need to find correct output queue for dstaddr.  for the local
-   * queues, shuffler_send always goes to the origin (local_orq) outset.
+   * queues, shuffle_enqueue always goes to the origin (local_orq) outset.
    */
   oset = (nexus == NX_DESTREP) ? &sh->remoteq : &sh->local_orq;
 
@@ -1808,7 +1817,7 @@ hg_return_t shuffler_send(shuffler_t sh, int dst, uint32_t type,
   if (oset->shufsend_rpclimit > 0) {
     rv = sender_limit(sh, oset);    /* this may block! */
     if (rv != HG_SUCCESS) {
-      drop_reqs(&req, NULL, "shuffler_send: sender_limit");
+      drop_reqs(&req, NULL, "shuffle_enqueue: sender_limit");
       return(rv);
     }
   }
@@ -1819,7 +1828,7 @@ hg_return_t shuffler_send(shuffler_t sh, int dst, uint32_t type,
      * nexus knew the addr, but we couldn't find a a queue!
      * this should not happen!!!
      */
-    mlog(CLNT_ERR, "shuffler_send: no route to dst %d", dst);
+    mlog(CLNT_ERR, "shuffle_enqueue: no route to dst %d", dst);
     return(HG_INVALID_PARAM);
   }
 
@@ -1835,12 +1844,12 @@ hg_return_t shuffler_send(shuffler_t sh, int dst, uint32_t type,
 /*
  * req_to_self: sending/forward a req to ourself via the delivery thread.
  *
- * for apps sending (i.e. input==NULL, we are called via shuffler_send())
+ * for apps sending (i.e. input==NULL, we are called via shuffle_enqueue())
  * we will block if the delivery queue is full.  for blocking we'll use a
  * req_parent's condvar provided by the caller to block.  the caller
  * typically allocates the req_parent on the stack.
  *
- * for reqs generated by the shuffler_rpchand() callback function
+ * for reqs generated by the shuffle_rpchand() callback function
  * (input != NULL), if we get put on a wait queue we'll let
  * req_parent_init() malloc a req_parent to save the input handle
  * on until.   we'll hold the HG_Respond() call until all reqs in
@@ -1862,14 +1871,14 @@ hg_return_t shuffler_send(shuffler_t sh, int dst, uint32_t type,
  * if this fails, we free the request (what else can we do?) which
  * means it gets dropped ...
  *
- * @param sh the shuffler involved
+ * @param sh the shuffle involved
  * @param req the request to send/forward to self
  * @param input the inbound handle that generated the req
  * @param rpcin ptr to the rcpin value of the inbound req (input != NULL case)
  * @param parentp parent ptr (will allocate a new one if needed)
  * @return status
  */
-static hg_return_t req_to_self(struct shuffler *sh, struct request *req,
+static hg_return_t req_to_self(struct shuffle *sh, struct request *req,
                                hg_handle_t input, rpcin_t *rpcin,
                                struct req_parent **parentp) {
   hg_return_t rv = HG_SUCCESS;
@@ -1917,7 +1926,7 @@ static hg_return_t req_to_self(struct shuffler *sh, struct request *req,
       sh->dwaitq.push_back(req); /* add req to wait queue */
       shufmax(&sh->cntdmaxwait, sh->dwaitq.size());
     } else {
-      notify(SHUF_CRIT, "shuffler: req_to_self parent init failed (%d)", rv);
+      notify(SHUF_CRIT, "shuffle: req_to_self parent init failed (%d)", rv);
       drop_reqs(&req, NULL, "req_to_self"); /* error means we can't send it */
     }
 
@@ -1938,7 +1947,7 @@ static hg_return_t req_to_self(struct shuffler *sh, struct request *req,
     if (acnt32_decr(parent->nrefs) < 1) {
       mlog(CLNT_D1, "req_to_self: NO block, req=%p, parent=%p", req, parent);
     } else {
-      init_cond_timedwait(&ctw, SHUFFLER_TIMEOUT, 1, "req_to_self");
+      init_cond_timedwait(&ctw, SHUFFLE_TIMEOUT, 1, "req_to_self");
       parent->need_wakeup = 1;    /* protected by pcvlock */
       while (parent->need_wakeup) {
         mlog(CLNT_D1, "req_to_self: blocked! req=%p, parent=%p", req, parent);
@@ -1965,22 +1974,22 @@ static hg_return_t req_to_self(struct shuffler *sh, struct request *req,
 
 /*
  * req_via_mercury: send a req via mercury.  as usual there are two
- * cases: input == NULL: app sending directly via shuffler_send()
+ * cases: input == NULL: app sending directly via shuffle_enqueue()
  *        input != NULL: forwarding req recv'd via mercury RPC
  *
  * flow control blocking is handled the same way as req_to_self()
  * (see discussion above).
  *
- * @param sh the shuffler we are sending with
+ * @param sh the shuffle we are sending with
  * @param oset the output queue set we are using
  * @param oq the output queue to use
  * @param req the request to send
- * @param input input RPC handle (null if via app shuffler_send call)
+ * @param input input RPC handle (null if via app shuffle_enqueue call)
  * @param rpcin ptr to the rcpin value of the inbound req (input != NULL case)
  * @param parentp parent ptr (will allocate a new one if needed)
  * @return status, normally success
  */
-static hg_return_t req_via_mercury(struct shuffler *sh, struct outset *oset,
+static hg_return_t req_via_mercury(struct shuffle *sh, struct outset *oset,
                                    struct outqueue *oq, struct request *req,
                                    hg_handle_t input, rpcin_t *rpcin,
                                    struct req_parent **parentp) {
@@ -2024,7 +2033,7 @@ static hg_return_t req_via_mercury(struct shuffler *sh, struct outset *oset,
       oq->oqwaitq.push_back(req); /* add req to oq's waitq */
       shufmax(&oq->cntoqmaxwait, oq->oqwaitq.size());
     } else {
-      notify(SHUF_CRIT, "shuffler: req_via_mercury parent init failed (%d)",
+      notify(SHUF_CRIT, "shuffle: req_via_mercury parent init failed (%d)",
               rv);
       drop_reqs(&req, NULL, "req_via_mercury"); /* error, can't send it */
     }
@@ -2048,7 +2057,7 @@ static hg_return_t req_via_mercury(struct shuffler *sh, struct outset *oset,
       mlog(CLNT_D1, "req_via_mercury: NO block, req=%p, parent=%p",
            req, parent);
     } else {
-      init_cond_timedwait(&ctw, SHUFFLER_TIMEOUT, 1, "req_via_mercury");
+      init_cond_timedwait(&ctw, SHUFFLE_TIMEOUT, 1, "req_via_mercury");
       parent->need_wakeup = 1;    /* protected by pcvlock */
       while (parent->need_wakeup) {
         mlog(CLNT_D1, "req_via_mercury: blocking req=%p, parent=%p",
@@ -2185,14 +2194,14 @@ static bool append_req_to_locked_outqueue(struct outset *oset,
  * and remove the output from the list.
  *
  * @param tosend a list of reqs to send
- * @param sh shuffler we are sending with
+ * @param sh shuffle we are sending with
  * @param oset the output queue set we are working with
  * @param oq the output queue we are sending on
  * @param oput the freshly allocated output for the send
  * @return status (hopefully success)
  */
 static hg_return_t forward_reqs_now(struct request_queue *tosend,
-                                    struct shuffler *sh, struct outset *oset,
+                                    struct shuffle *sh, struct outset *oset,
                                     struct outqueue *oq, struct output *oput) {
   hg_return_t rv = HG_SUCCESS;
   hg_handle_t newhand = NULL;
@@ -2207,7 +2216,7 @@ static hg_return_t forward_reqs_now(struct request_queue *tosend,
   XSIMPLEQ_CONCAT(&in.inreqs, tosend);
 
   /* allocate new handle */
-  rv = HG_Create(oset->myhgt->mctx, oq->dst, oset->myhgt->rpcid, &newhand);
+  rv = HG_Create(oset->myhgp->mctx, oq->dst, oset->myhgp->rpcid, &newhand);
   mlog(SHUF_CALL, "forward_now: output=%p rnk=[%d.%d] %s dst=%p hand=%p",
        oput, oq->grank, oq->subrank, outset_typstr(oq->myset->settype),
        oq->dst, newhand);
@@ -2311,10 +2320,10 @@ static hg_return_t forw_cb(const struct hg_cb_info *cbi) {
   if (hand && cbi->ret == HG_SUCCESS) {
     if (HG_Get_output(hand, &out) != HG_SUCCESS) {
       /* shouldn't ever happen, output is just 3 numbers */
-      notify(SHUF_CRIT, "shuffler: forw_cb: get output failed");
+      notify(SHUF_CRIT, "shuffle: forw_cb: get output failed");
     } else {
       if (out.ret != HG_SUCCESS) {
-        notify(SHUF_CRIT, "shuffler: forw_cb: RPC %d failed (%d)",
+        notify(SHUF_CRIT, "shuffle: forw_cb: RPC %d failed (%d)",
           out.oseq, out.ret);
       }
       HG_Free_output(hand, &out);
@@ -2387,9 +2396,9 @@ static void forw_start_next(struct outqueue *oq, struct output *oput) {
   pthread_mutex_lock(&oq->oqlock);
 
   if (oq->oqflushing && oset->shuf->curflush == NULL) {
-      notify(SHUF_CRIT, "shuffler: forw_start_next: flush sanity check fail!");
-      notify(SHUF_CRIT, "shuffler: oq=%p [%d.%d]", oq, oq->grank, oq->subrank);
-      shuffler_statedump(oset->shuf, 0);
+      notify(SHUF_CRIT, "shuffle: forw_start_next: flush sanity check fail!");
+      notify(SHUF_CRIT, "shuffle: oq=%p [%d.%d]", oq, oq->grank, oq->subrank);
+      shuffle_statedump(oset->shuf, 0);
       abort();
   }
 
@@ -2526,7 +2535,7 @@ static void forw_start_next(struct outqueue *oq, struct output *oput) {
 }
 
 /*
- * shuffler_rpchand: mercury callback when we recv an RPC.  we need to
+ * shuffle_rpchand: mercury callback when we recv an RPC.  we need to
  * unpack the requests in the batch and use nexus to forward them on
  * to their next hop.  we'll allocate a req_parent to own any req that
  * gets placed on a waitq.  being placed on a waitq will cause our
@@ -2535,11 +2544,11 @@ static void forw_start_next(struct outqueue *oq, struct output *oput) {
  * @param handle the handle from the RPC request
  * @return success
  */
-static hg_return_t shuffler_rpchand(hg_handle_t handle) {
+static hg_return_t shuffle_rpchand(hg_handle_t handle) {
   const struct hg_info *hgi;
-  struct hgthread *inhgt;
+  struct hgprogress *inhgp;
   struct outset *outoset;
-  struct shuffler *sh;
+  struct shuffle *sh;
   int islocal, rank;
   hg_return_t ret;
   rpcin_t in;
@@ -2556,16 +2565,17 @@ static hg_return_t shuffler_rpchand(hg_handle_t handle) {
   /* recover output queue set from handle and see if it is local or remote */
   hgi = HG_Get_info(handle);
   if (!hgi) {
-    notify(SHUF_CRIT, "shuffler_rpchand: no hg_info (%p)", handle);
+    notify(SHUF_CRIT, "shuffle_rpchand: no hg_info (%p)", handle);
     abort();   /* should never happen */
   }
-  inhgt = (struct hgthread *) HG_Registered_data(hgi->hg_class, hgi->id);
-  if (!inhgt) {
-    notify(SHUF_CRIT, "shuffler_rpchand: no registered data (%p)", handle);
-    abort();   /* should never happen */
+  inhgp = (struct hgprogress *) HG_Registered_data(hgi->hg_class, hgi->id);
+  if (!inhgp) {
+    HG_Destroy(handle);
+    mlog(SHUF_WARN, "shuffle_rpchand: drop req due to no registered data");
+    return(HG_CANCELED);
   }
-  sh = inhgt->hgshuf;
-  islocal = (inhgt == &sh->hgt_local);
+  sh = inhgp->hgshuf;
+  islocal = (inhgp == &sh->hgp_local);
   mlog(SHUF_D1, "rpchand: got request hand=%p local=%d", handle, islocal);
   if (islocal)
     shufcount(&sh->cntrpcinshm);
@@ -2624,8 +2634,8 @@ static hg_return_t shuffler_rpchand(hg_handle_t handle) {
      *                 -> input should be from shm (we are SRCREP)
      *   NX_SRCREP:   dst is on remote node, need to forw to SRCREP
      *                 -> can't happen!  only happens at SRC.
-     *                    all SRC routing happens in shuffler_send(),
-     *                    never in shuffler_rpchand().
+     *                    all SRC routing happens in shuffle_enqueue(),
+     *                    never in shuffle_rpchand().
      *
      * sanity check it here to avoid network loops
      */
@@ -2683,7 +2693,7 @@ static hg_return_t shuffler_rpchand(hg_handle_t handle) {
     reply.respondrank = sh->grank;
     reply.ret = ret;
     (void) HG_Free_input(handle, &in);
-    ret = HG_Respond(handle, shuffler_desthand_cb, handle, &reply);
+    ret = HG_Respond(handle, shuffle_desthand_cb, handle, &reply);
     if (ret != HG_SUCCESS)
       HG_Destroy(handle);
   }
@@ -2693,12 +2703,12 @@ static hg_return_t shuffler_rpchand(hg_handle_t handle) {
 }
 
 /*
- * shuffler_desthand_cb: sent reply, drop the handle
+ * shuffle_desthand_cb: sent reply, drop the handle
  *
  * @param cbi the arg for the callback
  * @return success
  */
-static hg_return_t shuffler_desthand_cb(const struct hg_cb_info *cbi) {
+static hg_return_t shuffle_desthand_cb(const struct hg_cb_info *cbi) {
   hg_handle_t handle = (hg_handle_t)cbi->arg;
   mlog(SHUF_CALL, "desthand_cb: HG_Respond done.  handle=%p", handle);
   HG_Destroy(handle);
@@ -2714,13 +2724,13 @@ static hg_return_t shuffler_desthand_cb(const struct hg_cb_info *cbi) {
  * and init the oqflush_counter to 1 (to hold it until the caller
  * can sleep).
  *
- * @param sh the shuffler we are using
+ * @param sh the shuffle we are using
  * @param fop the op that needs to flush, has not been init'd
  * @param type the type of flush we are planning to run (FLUSH_*)
  * @param oset the output set (if type is localq or remoteq)
  * @return status (normally success after waiting)
  */
-static hg_return_t aquire_flush(struct shuffler *sh, struct flush_op *fop,
+static hg_return_t aquire_flush(struct shuffle *sh, struct flush_op *fop,
                                 int type, struct outset *oset) {
   hg_return_t rv = HG_SUCCESS;
   struct cond_timedwait ctw;
@@ -2728,7 +2738,7 @@ static hg_return_t aquire_flush(struct shuffler *sh, struct flush_op *fop,
 
   /* first init the flush operation's CV */
   if (pthread_cond_init(&fop->flush_waitcv, NULL) != 0) {
-    notify(CLNT_CRIT, "shuffler: flush cv init failed!");
+    notify(CLNT_CRIT, "shuffle: flush cv init failed!");
     return(HG_OTHER_ERROR);
   }
 
@@ -2740,7 +2750,7 @@ static hg_return_t aquire_flush(struct shuffler *sh, struct flush_op *fop,
   /* if flush is busy, our op needs to wait for it */
   if (fop->status == FLUSHQ_PENDING) {
     XSIMPLEQ_INSERT_TAIL(&sh->fpending, fop, fq);
-    init_cond_timedwait(&ctw, SHUFFLER_TIMEOUT, 1, "aquire_flush");
+    init_cond_timedwait(&ctw, SHUFFLE_TIMEOUT, 1, "aquire_flush");
     while (fop->status == FLUSHQ_PENDING) {
      mlog(CLNT_D1, "aquire_flush: blocking fop=%p", fop);
      do_cond_timedwait(sh, &fop->flush_waitcv, &sh->flushlock, &ctw); /*BLOCK*/
@@ -2749,7 +2759,7 @@ static hg_return_t aquire_flush(struct shuffler *sh, struct flush_op *fop,
 
     /* wakeup removed us from pending queue, see if we were canceled */
     if (fop->status == FLUSHQ_CANCEL) {
-      notify(CLNT_CRIT, "shuffler: aqflush: cancel while waiting");
+      notify(CLNT_CRIT, "shuffle: aqflush: cancel while waiting");
       pthread_cond_destroy(&fop->flush_waitcv);
       return(HG_CANCELED);
     }
@@ -2772,9 +2782,9 @@ static hg_return_t aquire_flush(struct shuffler *sh, struct flush_op *fop,
 
   /* make sure we are still running or we might block forever... */
   if (( (type == FLUSH_LOCAL_ORQ || type == FLUSH_LOCAL_RLQ)  &&
-        (sh->hgt_local.nshutdown  != 0 || sh->hgt_local.nrunning  == 0)) ||
+        (sh->hgp_local.nshutdown  != 0 || sh->hgp_local.nrunning  == 0)) ||
       (type == FLUSH_REMOTEQ &&
-        (sh->hgt_remote.nshutdown != 0 || sh->hgt_remote.nrunning == 0)) ||
+        (sh->hgp_remote.nshutdown != 0 || sh->hgp_remote.nrunning == 0)) ||
       (type == FLUSH_DELIVER && (sh->dshutdown != 0 || sh->drunning == 0)) ) {
 
     drop_curflush(sh);
@@ -2789,9 +2799,9 @@ static hg_return_t aquire_flush(struct shuffler *sh, struct flush_op *fop,
  * drop_curflush: we are the flusher, but we are done with it.  drop it
  * and wake up anyone waiting on the pending list to flush.
  *
- * @param sh the shuffler we are using
+ * @param sh the shuffle we are using
  */
-static void drop_curflush(struct shuffler *sh) {
+static void drop_curflush(struct shuffle *sh) {
   struct flush_op *nxtfop;
   mlog(CLNT_CALL, "drop_curflush");
 
@@ -2820,20 +2830,20 @@ static void drop_curflush(struct shuffler *sh) {
 }
 
 /*
- * shuffler_flush_delivery: flush the delivery queue.  this function
+ * shuffle_flush_delivery: flush the delivery queue.  this function
  * blocks until all requests currently in the delivery queues (both
  * deliverq and dwaitq) are delivered.
  */
-hg_return_t shuffler_flush_delivery(shuffler_t sh) {
+hg_return_t shuffle_flush_delivery(shuffle_t sh) {
   struct flush_op fop;
   hg_return_t rv;
   struct cond_timedwait ctw;
-  mlog(CLNT_CALL, "shuffler_flush_delivery");
+  mlog(CLNT_CALL, "shuffle_flush_delivery");
 
   rv = aquire_flush(sh, &fop, FLUSH_DELIVER, NULL);    /* may BLOCK here */
   if (rv != HG_SUCCESS)
     return(rv);
-  mlog(CLNT_D1, "shuffler_flush_delivery: aquired flush");
+  mlog(CLNT_D1, "shuffle_flush_delivery: aquired flush");
 
   /*
    * we now own the current flush operation, set counter and wait.
@@ -2842,8 +2852,8 @@ hg_return_t shuffler_flush_delivery(shuffler_t sh) {
    */
   pthread_mutex_lock(&sh->deliverlock);
   sh->dflush_counter = sh->deliverq.size() + sh->dwaitq.size();
-  mlog(CLNT_D1, "shuffler_flush_delivery: count=%d", sh->dflush_counter);
-  init_cond_timedwait(&ctw, SHUFFLER_TIMEOUT, 1, "flush_delivery");
+  mlog(CLNT_D1, "shuffle_flush_delivery: count=%d", sh->dflush_counter);
+  init_cond_timedwait(&ctw, SHUFFLE_TIMEOUT, 1, "flush_delivery");
   while (sh->dflush_counter > 0 && fop.status == FLUSHQ_READY) {
     pthread_cond_signal(&sh->delivercv);  /* flush always wakes thread */
     do_cond_timedwait(sh, &fop.flush_waitcv, &sh->deliverlock, &ctw); /*BLOCK*/
@@ -2854,17 +2864,17 @@ hg_return_t shuffler_flush_delivery(shuffler_t sh) {
   drop_curflush(sh);
 
   rv = (fop.status == FLUSHQ_CANCEL) ? HG_CANCELED : HG_SUCCESS;
-  mlog(CLNT_D1, "shuffler_flush_delivery: done rv=%d", rv);
+  mlog(CLNT_D1, "shuffle_flush_delivery: done rv=%d", rv);
   return(rv);
 }
 
 /*
- * shuffler_flush_qs: flush either local or remote output queues.
+ * shuffle_flush_qs: flush either local or remote output queues.
  * this function blocks until all requests currently in the specified
  * output queues are delivered. We make no claims about requests that
  * arrive after the flush has been started.
  */
-hg_return_t shuffler_flush_qs(shuffler_t sh, int whichqs) {
+hg_return_t shuffle_flush_qs(shuffle_t sh, int whichqs) {
   struct flush_op fop;
   hg_return_t rv;
   int ftype, r;
@@ -2872,27 +2882,27 @@ hg_return_t shuffler_flush_qs(shuffler_t sh, int whichqs) {
   std::map<hg_addr_t, struct outqueue *>::iterator it;
   struct outqueue *oq;
   struct cond_timedwait ctw;
-  mlog(CLNT_CALL, "shuffler_flush_qs: type=%s", outset_typstr(whichqs));
+  mlog(CLNT_CALL, "shuffle_flush_qs: type=%s", outset_typstr(whichqs));
 
   /* no point trying to flush if we can't send */
   if (sh->disablesend)
     return(HG_CANCELED);
 
   switch (whichqs) {
-    case SHUFFLER_REMOTE_QUEUES:
+    case SHUFFLE_REMOTE_QUEUES:
       oset = &sh->remoteq;
       ftype = FLUSH_REMOTEQ;
       break;
-    case SHUFFLER_ORIGIN_QUEUES:
+    case SHUFFLE_ORIGIN_QUEUES:
       oset = &sh->local_orq;
       ftype = FLUSH_LOCAL_ORQ;
       break;
-    case SHUFFLER_RELAY_QUEUES:
+    case SHUFFLE_RELAY_QUEUES:
       oset = &sh->local_rlq;
       ftype = FLUSH_LOCAL_RLQ;
       break;
     default:
-      mlog(CLNT_ERR, "shuffler_flush_qs(%d): bad whichqs", whichqs);
+      mlog(CLNT_ERR, "shuffle_flush_qs(%d): bad whichqs", whichqs);
       return(HG_OTHER_ERROR);
   }
 
@@ -2900,7 +2910,7 @@ hg_return_t shuffler_flush_qs(shuffler_t sh, int whichqs) {
   if (rv != HG_SUCCESS) {
     return(rv);
   }
-  mlog(CLNT_D1, "shuffler_flush_qs: type=%s AQUIRED!", outset_typstr(whichqs));
+  mlog(CLNT_D1, "shuffle_flush_qs: type=%s AQUIRED!", outset_typstr(whichqs));
 
   /*
    * we've aquired the flush, including setting osetflushing and
@@ -2928,9 +2938,9 @@ hg_return_t shuffler_flush_qs(shuffler_t sh, int whichqs) {
   if (r == 0)
     oset->osetflushing = 0;  /* nothing left to wait for */
 
-  mlog(CLNT_D1, "shuffler_flush_qs: waiting... type=%s osetflushing=%d!",
+  mlog(CLNT_D1, "shuffle_flush_qs: waiting... type=%s osetflushing=%d!",
        outset_typstr(whichqs), oset->osetflushing);
-  init_cond_timedwait(&ctw, SHUFFLER_TIMEOUT, 1, "flush_qs");
+  init_cond_timedwait(&ctw, SHUFFLE_TIMEOUT, 1, "flush_qs");
   while (oset->osetflushing != 0 && fop.status == FLUSHQ_READY) {
     do_cond_timedwait(sh, &fop.flush_waitcv, &sh->flushlock, &ctw); /*BLOCK*/
   }
@@ -2941,7 +2951,7 @@ hg_return_t shuffler_flush_qs(shuffler_t sh, int whichqs) {
    */
   oset->osetflushing = 0;
   pthread_mutex_unlock(&sh->flushlock);
-  mlog(CLNT_D1, "shuffler_flush_qs: wait done!");
+  mlog(CLNT_D1, "shuffle_flush_qs: wait done!");
 
   /*
    * done!   drop the flush and return...
@@ -2951,7 +2961,7 @@ hg_return_t shuffler_flush_qs(shuffler_t sh, int whichqs) {
   }
   drop_curflush(sh);
   rv = (fop.status == FLUSHQ_CANCEL) ? HG_CANCELED : HG_SUCCESS;
-  mlog(CLNT_D1, "shuffler_flush_qs: done! type=%s rv=%d!",
+  mlog(CLNT_D1, "shuffle_flush_qs: done! type=%s rv=%d!",
        outset_typstr(whichqs), rv);
   return(rv);
 }
@@ -2968,11 +2978,11 @@ hg_return_t shuffler_flush_qs(shuffler_t sh, int whichqs) {
  * then we're done!).   if we do start a flush, we'll set oq->oqflushing
  * and add one to oset->oqflush_counter (while holding the oqlock).
  *
- * @param sh the shuffler we are using
+ * @param sh the shuffle we are using
  * @param oset the output set being flushed
  * @param oq the output queue to flush
  */
-static void start_qflush(struct shuffler *sh, struct outset *oset,
+static void start_qflush(struct shuffle *sh, struct outset *oset,
                         struct outqueue *oq) {
   bool tosend;
   struct request_queue tosendq;
@@ -2983,7 +2993,7 @@ static void start_qflush(struct shuffler *sh, struct outset *oset,
   pthread_mutex_lock(&oq->oqlock);
 
   if (oq->oqflushing) {
-    notify(UTIL_CRIT, "shuffler: start_qflush: oq->flushing already set?!");
+    notify(UTIL_CRIT, "shuffle: start_qflush: oq->flushing already set?!");
     abort();    /* this shouldn't happen */
   }
 
@@ -3009,7 +3019,7 @@ static void start_qflush(struct shuffler *sh, struct outset *oset,
     pthread_mutex_unlock(&oq->oqlock);
     if (forward_reqs_now(&tosendq, sh, oset, oq, oput) != HG_SUCCESS) {
       /* XXX: no good recovery from this */
-      notify(UTIL_CRIT, "shuffler: start_qflush: forward_reqs_now failed?!");
+      notify(UTIL_CRIT, "shuffle: start_qflush: forward_reqs_now failed?!");
     }
     pthread_mutex_lock(&oq->oqlock);
   }
@@ -3039,11 +3049,11 @@ done:
  * we own the flush so it is safe to clear out oset once all the
  * output queues have been reset...
  *
- * @param sh the shuffler we are using
+ * @param sh the shuffle we are using
  * @param oset the output set being flushed
  * @return 1 if flush is pending, otherwise zero
  */
-static void clean_qflush(struct shuffler *sh, struct outset *oset) {
+static void clean_qflush(struct shuffle *sh, struct outset *oset) {
   std::map<hg_addr_t, struct outqueue *>::iterator it;
   struct outqueue *oq;
   mlog(UTIL_CALL, "clean_qflush: oset=%p", oset);
@@ -3058,7 +3068,7 @@ static void clean_qflush(struct shuffler *sh, struct outset *oset) {
     pthread_mutex_unlock(&oq->oqlock);
   }
 
-  if (oset->osetflushing != 0) {  /* prev. cleared in shuffler_flush_qs */
+  if (oset->osetflushing != 0) {  /* prev. cleared in shuffle_flush_qs */
     notify(UTIL_CRIT, "clean_flushq called with nonzero osetflushing?");
     abort();
   }
@@ -3073,7 +3083,7 @@ static void clean_qflush(struct shuffler *sh, struct outset *oset) {
  */
 static void done_oq_flush(struct outqueue *oq) {
   struct outset *oset = oq->myset;
-  struct shuffler *sh = oset->shuf;
+  struct shuffle *sh = oset->shuf;
   int r;
 
   r = acnt32_decr(oset->oqflush_counter);
@@ -3099,10 +3109,10 @@ static void done_oq_flush(struct outqueue *oq) {
 /*
  * dumpstats: dump stats to mlog NOTE
  *
- * @param sh the shuffler to dump
+ * @param sh the shuffle to dump
  */
-static void dumpstats(shuffler_t sh) {
-#ifdef SHUFFLER_COUNT
+static void dumpstats(shuffle_t sh) {
+#ifdef SHUFFLE_COUNT
   std::map<hg_addr_t,struct outqueue *>::iterator oqit;
   const char *names[3] = { "local_origin", "local_relay", "remote" };
   struct outset *o[3] = { &sh->local_orq, &sh->local_rlq, &sh->remoteq }, *os;
@@ -3128,10 +3138,12 @@ static void dumpstats(shuffler_t sh) {
   mlog(SHUF_NOTE, "oset-hitlimit: local_or=%d, local_rl=%d, remote=%d",
        sh->local_orq.os_senderlimit, sh->local_rlq.os_senderlimit,
        sh->remoteq.os_senderlimit);
-  mlog(SHUF_NOTE, "local_hgt: nprogress=%d, ntrigger=%d",
-       sh->hgt_local.nprogress, sh->hgt_local.ntrigger);
-  mlog(SHUF_NOTE, "remote_hgt: nprogress=%d, ntrigger=%d",
-       sh->hgt_remote.nprogress, sh->hgt_remote.ntrigger);
+  mlog(SHUF_NOTE, "local_hgp: nprogress=%" PRIu64 ", ntrigger=%" PRIu64,
+       mercury_progressor_nprogress(sh->hgp_local.mphand),
+       mercury_progressor_ntrigger(sh->hgp_local.mphand));
+  mlog(SHUF_NOTE, "remote_hgp: nprogress=%" PRIu64 ", ntrigger=%" PRIu64,
+       mercury_progressor_nprogress(sh->hgp_remote.mphand),
+       mercury_progressor_ntrigger(sh->hgp_remote.mphand));
   for (lcv = 0; lcv < 3 ; lcv++) {
     mlog(SHUF_NOTE, "outqueue-stats: %s", names[lcv]);
     os = o[lcv];
@@ -3148,12 +3160,12 @@ static void dumpstats(shuffler_t sh) {
 }
 
 /*
- * shuffler_send_stats: report number of rpcs sent.
+ * shuffle_send_stats: report number of rpcs sent.
  */
-hg_return_t shuffler_send_stats(shuffler_t sh, hg_uint64_t* local_origin,
+hg_return_t shuffle_send_stats(shuffle_t sh, hg_uint64_t* local_origin,
                                 hg_uint64_t* local_relay, hg_uint64_t* remote) {
   *local_origin = *local_relay = *remote = 0;
-#ifdef SHUFFLER_COUNT
+#ifdef SHUFFLE_COUNT
   std::map<hg_addr_t,struct outqueue *>::iterator oqit;
   struct outset *o[3] = { &sh->local_orq, &sh->local_rlq, &sh->remoteq };
 
@@ -3169,11 +3181,11 @@ hg_return_t shuffler_send_stats(shuffler_t sh, hg_uint64_t* local_origin,
 }
 
 /*
- * shuffler_recv_stats: report number of rpcs received.
+ * shuffle_recv_stats: report number of rpcs received.
  */
-hg_return_t shuffler_recv_stats(shuffler_t sh, hg_uint64_t* local,
+hg_return_t shuffle_recv_stats(shuffle_t sh, hg_uint64_t* local,
                                 hg_uint64_t* remote) {
-#ifdef SHUFFLER_COUNT
+#ifdef SHUFFLE_COUNT
   *local = static_cast<hg_uint64_t>(sh->cntrpcinshm);
   *remote = static_cast<hg_uint64_t>(sh->cntrpcinnet);
 #endif
@@ -3181,9 +3193,9 @@ hg_return_t shuffler_recv_stats(shuffler_t sh, hg_uint64_t* local,
 }
 
 /*
- * statedump_oset: helper fn for shuffler statedump
+ * statedump_oset: helper fn for shuffle statedump
  */
-static void statedump_oset(shuffler_t sh, int lvl, const char *name,
+static void statedump_oset(shuffle_t sh, int lvl, const char *name,
   struct outset *oset) {
   std::map<hg_addr_t,struct outqueue *>::iterator oqit;
   std::deque<request *>::iterator reqit;
@@ -3195,7 +3207,7 @@ static void statedump_oset(shuffler_t sh, int lvl, const char *name,
   int32_t rtime;
 
   notify(lvl, "oset %s: run/shut=%d/%d, fl=%d, flcnt=%d, nrpcs=%d", name,
-         oset->myhgt->nrunning, oset->myhgt->nshutdown, oset->osetflushing,
+         oset->myhgp->nrunning, oset->myhgp->nshutdown, oset->osetflushing,
          acnt32_get(oset->oqflush_counter), oset->outset_nrpcs);
 
   for (oqit = oset->oqs.begin() ; oqit != oset->oqs.end() ; oqit++) {
@@ -3267,9 +3279,9 @@ static void statedump_oset(shuffler_t sh, int lvl, const char *name,
 }
 
 /*
- * shuffler_statedump: dump out current state of shuffle for diagnostics
+ * shuffle_statedump: dump out current state of shuffle for diagnostics
  */
-void shuffler_statedump(shuffler_t sh, int tostderr) {
+void shuffle_statedump(shuffle_t sh, int tostderr) {
   int lvl, lck_rv, qsz, wsz, idx, rtime;
   std::deque<request *>::iterator reqit;
   struct request *req;
@@ -3279,7 +3291,7 @@ void shuffler_statedump(shuffler_t sh, int tostderr) {
 
   lvl = SHUF_NOTE;
   if (tostderr) lvl |= MLOG_STDERR;
-  notify(lvl, "shuffler state dump:");
+  notify(lvl, "shuffle state dump:");
   notify(lvl, "rank=%d, disablesend=%d, seqsrc=%d", sh->grank,
          sh->disablesend, acnt32_get(sh->seqsrc));
 
@@ -3327,19 +3339,23 @@ void shuffler_statedump(shuffler_t sh, int tostderr) {
 }
 
 /*
- * shuffler_shutdown: stop all threads, release all memory.
+ * shuffle_shutdown: stop all threads, release all memory.
  * does not shutdown mercury (since we didn't start it, nexus did),
  * but mercury should not be restarted once we call this.
  */
-hg_return_t shuffler_shutdown(shuffler_t sh) {
+hg_return_t shuffle_shutdown(shuffle_t sh) {
   int cnt;
   mlog(CLNT_CALL, "shuffer_shutdown");
+
+  /*  switch off inbound RPC by killing registered data */
+  HG_Register_data(sh->hgp_local.mcls, sh->hgp_local.rpcid, NULL, NULL);
+  HG_Register_data(sh->hgp_remote.mcls, sh->hgp_remote.rpcid, NULL, NULL);
 
   /* stop all new inbound requests */
   sh->disablesend = 1;
 
   /* cancel any flush ops that are queued or running */
-  shuffler_flush_discard(sh);
+  shuffle_flush_discard(sh);
 
   /* stop all threads */
   stop_threads(sh);
@@ -3347,16 +3363,16 @@ hg_return_t shuffler_shutdown(shuffler_t sh) {
   /* purge any orphaned reqs */
   cnt = purge_reqs(sh);
   if (cnt) {
-    notify(CLNT_CRIT, "shuffler: shutdown warning: %d orphans", cnt);
+    notify(CLNT_CRIT, "shuffle: shutdown warning: %d orphans", cnt);
   }
 
   /* dump counters */
   dumpstats(sh);
 
   /* now free remaining structure */
-  shuffler_outset_discard(&sh->local_orq);     /* ensures maps are empty */
-  shuffler_outset_discard(&sh->local_rlq);
-  shuffler_outset_discard(&sh->remoteq);
+  shuffle_outset_discard(&sh->local_orq);     /* ensures maps are empty */
+  shuffle_outset_discard(&sh->local_rlq);
+  shuffle_outset_discard(&sh->remoteq);
   if (sh->funname) free(sh->funname);
   if (sh->seqsrc) acnt32_free(&sh->seqsrc);
   pthread_mutex_destroy(&sh->deliverlock);
@@ -3364,7 +3380,7 @@ hg_return_t shuffler_shutdown(shuffler_t sh) {
   pthread_mutex_destroy(&sh->flushlock);
   delete sh;
   mlog(CLNT_CALL, "shuffer_shutdown: DONE closing log...");
-  shuffler_closelog();
+  shuffle_closelog();
 
   return(HG_SUCCESS);
 }

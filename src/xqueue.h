@@ -1,5 +1,5 @@
 /*
- * xqueue.h  subset of sys/queue.h for shuffler
+ * xqueue.h  subset of sys/queue.h for shuffle
  * 10-Jul-2017  chuck@ece.cmu.edu
  */
 

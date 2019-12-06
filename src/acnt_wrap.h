@@ -39,9 +39,9 @@
  * OSX's OSAtomic.h, the windows API).   while this works fine for
  * C, there are C++ issues when mercury decides to use stdatomic.h.
  * ( see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=60932 ).
- * 
+ *
  * for C, both gcc and clang provide an "_Atomic" keyword that stdatomic
- * uses to declare atomic values:   
+ * uses to declare atomic values:
  *      _Atomic int foo;
  *
  * and mercury_atomic.h makes use of that.   unfortunately, for C++
@@ -52,7 +52,7 @@
  * C++ (it is c++11?), so you can't count on it being there.   see
  * discussion in the 60932 bug report above).
  *
- * all we really want for shuffler is an atomic counter without having
+ * all we really want for shuffle is an atomic counter without having
  * to recreate all the portability tests that mercury has already done
  * for us.   to hack around this problem, we provide some C code that
  * wraps the mercury API and let our C++ code call that.
@@ -64,9 +64,9 @@
 extern "C" {
 #endif
 
-/* 
+/*
  * acnt32_t: wraps an hg_atomic_int32_t defn in an opaque structure
- * (the hg_atomic_int32_t may use _Atomic keywords, so it can't be 
+ * (the hg_atomic_int32_t may use _Atomic keywords, so it can't be
  * directly used in C++ code).
  */
 struct acnt32_val;

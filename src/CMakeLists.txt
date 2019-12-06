@@ -82,5 +82,5 @@ install (EXPORT deltafs-shuffle-targets
 install (FILES "${CMAKE_CURRENT_BINARY_DIR}/deltafs-shuffle-config.cmake"
         "${CMAKE_CURRENT_BINARY_DIR}/deltafs-shuffle-config-version.cmake"
         DESTINATION ${deltafs-shuffle-pkg-loc} )
-install (FILES ../include/deltafs-shuffle/shufapi.h
+install (FILES ../include/deltafs-shuffle/shuffle_api.h
          DESTINATION include/deltafs-shuffle)

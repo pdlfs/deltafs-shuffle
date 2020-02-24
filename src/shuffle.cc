@@ -47,6 +47,7 @@
 #include <sys/types.h>
 
 #include <mercury.h>
+#include <mercury_log.h>
 #include <mercury_macros.h>
 #include <deltafs-nexus/deltafs-nexus_api.h>
 
@@ -643,6 +644,30 @@ static hg_return_t hg_proc_rpcout_t(hg_proc_t proc, void *data) {
 
 done:
     return(ret);
+}
+
+/*
+ * shuffle_req_dup: malloc a duplicate copy of a req.  used for broadcast.
+ * caller is responsible for making sure this eventually gets freed.
+ *
+ * @param reqin the request to duplicate
+ * @return freshly malloc()'d and copied request
+ */
+static struct request *shuffle_req_dup(struct request *reqin) {
+    struct request *rv;
+    rv = (struct request *)malloc(sizeof(*rv)+reqin->datalen);
+    if (!rv) return(NULL);
+
+    rv->datalen = reqin->datalen;
+    rv->type = reqin->type;
+    rv->src = reqin->src;
+    rv->dst = reqin->dst;
+    rv->data = ((char *)rv) + sizeof(*rv);
+    if (reqin->datalen)
+        memcpy(rv->data, reqin->data, reqin->datalen);
+    rv->owner = NULL;
+    /* caller will init next pointer if/when req is put on a list */
+   return(rv);
 }
 
 /*
@@ -1842,6 +1867,62 @@ hg_return_t shuffle_enqueue(shuffle_t sh, int dst, uint32_t type,
 }
 
 /*
+ * shuffle_enqueue_broadcast: start the sending of a broadcast message
+ * via the shuffle (and the 3 hop topology).  Note that internally we
+ * convert a broadcast into normal RPCs as follows:
+ *  [1] we send a copy to ourself if requested (via flags)
+ *  [2] we send a copy to all local procs (via na+sm)
+ *  [3] we send a copy to all remote procs we talk to (via network)
+ * all these RPCs are sent via shuffle_enqueue(), thus the normal
+ * flow control rules apply to us (i.e. we may get blocked).
+ *
+ * we assume the shuffle will not be shutdown in the middle of our
+ * operation, so it is safe to hold on to iterators and such while
+ * calling shuffle_enqueue().  In the unlikely event of a failure,
+ * it is possible for the broadcast to only partially complete.
+ * (we'll print a warning if this happens...)
+ */
+hg_return_t shuffle_enqueue_broadcast(shuffle_t sh, uint32_t type, void *d,
+                                      uint32_t datalen, int flags) {
+    hg_return_t rv0, rv;
+    struct outset *oset[2];
+    unsigned int lcv;
+    std::map<hg_addr_t, struct outqueue *>::iterator it;
+    struct outqueue *oq;
+
+    rv0 = rv = HG_SUCCESS;
+    if ((flags & SHUFFLE_BCAST_SELF) != 0) {
+        rv = shuffle_enqueue(sh, sh->grank, type|SHUFFLE_RTYPE_BCAST,
+                             d, datalen);
+        if (rv != HG_SUCCESS) {
+          notify(SHUF_CRIT,
+                 "enqueue_broadcast: self enq failed (%d)!  Data lost.", rv);
+          rv0 = rv;
+        }
+    }
+
+    oset[0] = &sh->local_orq;
+    oset[1] = &sh->remoteq;
+    for (lcv = 0 ; lcv < sizeof(oset)/sizeof(*oset) ; lcv++) {
+        for (it = oset[lcv]->oqs.begin() ; it != oset[lcv]->oqs.end() ; it++) {
+            oq = it->second;
+            if (oq->grank == sh->grank)
+                continue;       /* already handled us */
+            rv = shuffle_enqueue(sh, oq->grank, type|SHUFFLE_RTYPE_BCAST,
+                                 d, datalen);
+            if (rv != HG_SUCCESS) {
+              notify(SHUF_CRIT,
+                     "enqueue_broadcast: enq to %d failed (%d)!  Data lost.",
+                     oq->grank, rv);
+              rv0 = rv;
+            }
+        }
+    }
+
+    return(rv0);
+}
+
+/*
  * req_to_self: sending/forward a req to ourself via the delivery thread.
  *
  * for apps sending (i.e. input==NULL, we are called via shuffle_enqueue())
@@ -2535,6 +2616,83 @@ static void forw_start_next(struct outqueue *oq, struct output *oput) {
 }
 
 /*
+ * shuffle_bcast_dup: we have received a broadcast request directed
+ * to us.  before we sent it to the delivery thread via req_to_self()
+ * we determine if we need to duplicate the req and forward it on to
+ * other endpoints we talk to.   there are three cases:
+ *   [1] req input !islocal: in this case we want to make copies for
+ *       all the local endpoints we talk to (e.g. on sh->local_rlq).
+ *       in this case we are the recv side of the second hop and
+ *       we are making copies for the third and final hop.
+ *   [2] req input islocal and req->src is on the local node: in this
+ *       case we are the recv side of the first hop and we need to
+ *       make copies for all the remote nodes we talk to for the second
+ *       hop.
+ *   [3] req input islocal and req->src is not on local node: in this
+ *       case we are the recv side of the third hop, so we do not need
+ *       to make copies of the req at all.
+ *
+ * @param sh the shuffle we are using
+ * @param req the inbound request received from a RPC request
+ * @param islocal true if we recv'd the request from a local proc (na+sm)
+ * @param qp the request queue to put the duplicate copies on
+ */
+void shuffle_bcast_dup(struct shuffle *sh, struct request *req,
+                       int islocal, struct request_queue *qp) {
+    nexus_ret_t nexus;
+    int rank;
+    hg_addr_t daddr;
+    struct outset *oset;
+    std::map<hg_addr_t, struct outqueue *>::iterator it;
+    struct outqueue *oq;
+    struct request *newrq;
+
+    /*
+     * sanity check: the qp should be empty when we get called since
+     * rpchand always fully drains bcast_inreqs before pulling from
+     * in.inreqs, and the only time we call bcast_dup() is when we are
+     * working on a bcast req from in.inreqs.
+     */
+    if (XSIMPLEQ_FIRST(qp)) {
+        notify(SHUF_WARN, "bcast_dup: warning: called w/non-empty eq?");
+    }
+
+    if (islocal) {
+       /* use nexus to determine if req->src is on local node or not */
+       nexus = nexus_next_hop(sh->nxp, req->src, &rank, &daddr);
+       if (nexus != NX_ISLOCAL) {
+           if (nexus != NX_DESTREP && nexus != NX_SRCREP)
+               notify(SHUF_WARN, "bcast_dup: nexus_err=%d for rank=%d",
+                      nexus, req->src);  /* sanity check, shouldn't fire */
+           return;             /* case [3], nothing to do -- return! */
+       }
+       oset = &sh->remoteq;    /* case [2], send to remotes */
+    } else {
+       oset = &sh->local_rlq;  /* case [1], send local for final delivery */
+    }
+
+    /*
+     * now replicate the req as-per the selected outset.
+     */
+    for (it = oset->oqs.begin() ; it != oset->oqs.end() ; it++) {
+        oq = it->second;
+        if (oq->grank == sh->grank)
+            continue;       /* don't make a copy for us, we already got it */
+
+        newrq = shuffle_req_dup(req);
+        if (!newrq) {
+            notify(SHUF_CRIT, "broadcast dup failed!  data likely lost!");
+            drop_reqs(NULL, qp, "shuffle_bcast_dup");
+            break;
+        } else {
+            newrq->dst = oq->grank;  /* update dst to next rank in bcast */
+            XSIMPLEQ_INSERT_TAIL(qp, newrq, next);
+        }
+    }
+
+}
+
+/*
  * shuffle_rpchand: mercury callback when we recv an RPC.  we need to
  * unpack the requests in the batch and use nexus to forward them on
  * to their next hop.  we'll allocate a req_parent to own any req that
@@ -2549,9 +2707,10 @@ static hg_return_t shuffle_rpchand(hg_handle_t handle) {
   struct hgprogress *inhgp;
   struct outset *outoset;
   struct shuffle *sh;
-  int islocal, rank;
+  int islocal, isbcastq, rank;
   hg_return_t ret;
   rpcin_t in;
+  struct request_queue bcast_inreqs;
   struct request *req;
   nexus_ret_t nexus;
   hg_addr_t dstaddr;
@@ -2596,6 +2755,7 @@ static hg_return_t shuffle_rpchand(hg_handle_t handle) {
     HG_Destroy(handle);
     return(ret);
   }
+  XSIMPLEQ_INIT(&bcast_inreqs);
   mlog(SHUF_D1, "rpchand: hand=%p is R%d-%d", handle, in.forwardrank, in.iseq);
 
   /*
@@ -2606,17 +2766,40 @@ static hg_return_t shuffle_rpchand(hg_handle_t handle) {
    * the wait queue (this is for flow control).   we delay the allocation
    * of the req_parent until its first use (in case we don't need it).
    */
-  while ((req = XSIMPLEQ_FIRST(&in.inreqs)) != NULL) {
+  while (1) {
 
-    /* remove req from front of list */
-    XSIMPLEQ_REMOVE_HEAD(&in.inreqs, next);
+    /*
+     * first use up locally generated requests that we made for a broadcast
+     * operation, then pull the ones that came from the inbound RPC.
+     * bcast_inreqs is always empty unless we get a broadcast request.
+     */
+    if ((req = XSIMPLEQ_FIRST(&bcast_inreqs)) != NULL) {
+        XSIMPLEQ_REMOVE_HEAD(&bcast_inreqs, next);
+        isbcastq = 1;
+    } else if ((req = XSIMPLEQ_FIRST(&in.inreqs)) != NULL) {
+        XSIMPLEQ_REMOVE_HEAD(&in.inreqs, next);
+        isbcastq = 0;
+    } else {
+        break;     /* no requests left, break the while loop, we are done */
+    }
 
     /* determine next hop */
     nexus = nexus_next_hop(sh->nxp, req->dst, &rank, &dstaddr);
-    mlog(SHUF_D1, "rpchand: new req=%p dst=%d nexus=%d", req, req->dst, nexus);
+    mlog(SHUF_D1, "rpchand: new req=%p bcastq=%d dst=%d nexus=%d", req,
+         isbcastq, req->dst, nexus);
 
     /* case 1: we are dst of this request */
     if (nexus == NX_DONE) {
+
+      /* if we recv a broadcast req, we may need to replicate it */
+      if ((req->type & SHUFFLE_RTYPE_BCAST) != 0) {
+          if (isbcastq) {
+              /* sanity check, this should never happen */
+              notify(SHUF_WARN, "rpchand: msg to self on bcastq");
+          } else {
+              shuffle_bcast_dup(sh, req, islocal, &bcast_inreqs);
+          }
+      }
 
       mlog(SHUF_D1, "rpchand: req=%p to_self", req);
       ret = req_to_self(sh, req, handle, &in, &parent);
@@ -2650,6 +2833,19 @@ static hg_return_t shuffle_rpchand(hg_handle_t handle) {
       continue;
     }
 
+    /*
+     * outbound broadcast requests should only come from the bcastq.
+     * sanity check it and drop if it looks fishy.
+     */
+    if ((req->type & SHUFFLE_RTYPE_BCAST) != 0 && !isbcastq) {
+      notify(SHUF_ERR, "rpchand: forwarding broadcast request  "
+                       "%d: %d->%d len=%d code=%d, l=%d, R%d-%d", sh->grank,
+                       req->src, req->dst, req->datalen, nexus, islocal,
+                       in.forwardrank, in.iseq);
+      drop_reqs(&req, NULL, NULL);  /* no msg, we already printed one */
+      continue;
+    }
+
     /* need to find correct output queue for dstaddr */
     outoset = (nexus == NX_DESTREP) ? &sh->remoteq : &sh->local_rlq;
     it = outoset->oqs.find(dstaddr);
@@ -2669,7 +2865,12 @@ static hg_return_t shuffle_rpchand(hg_handle_t handle) {
          oq->grank, oq->subrank, oq);
     ret = req_via_mercury(sh, outoset, oq, req, handle, &in, &parent);
 
-  }
+  } /* while (1) */
+
+  /*
+   * note that in.inreqs and bcast_inreqs must be empty now, as that
+   * is the only way we exit the above while loop.
+   */
 
   /*
    * if we malloc'd a req_parent via req_parent_init() [called in either

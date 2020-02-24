@@ -119,6 +119,11 @@
  * provide collective ops [barriers]).   see the nexus headers
  * for nexus API details.  shuffle itself does not directly call
  * MPI.
+ *
+ * we also support a broadcast mode where we use the 3 hop topology
+ * to replicate data as it travels through the system.   we use the
+ * top bit of the request "type" to indicate requests that are being
+ * sent via broadcast.
  */
 
 #pragma once
@@ -187,6 +192,12 @@ shuffle_t shuffle_init(nexus_ctx_t nxp, char *funname,
           shuffle_deliverfn_t delivercb, struct shuffle_opts *sopt);
 
 /*
+ * defines for request types
+ */
+#define SHUFFLE_RTYPE_BCAST   (1 << 31)  /* req is a broadcast */
+#define SHUFFLE_RTYPE_USRBITS 0x8fffffff /* user-defined bits */
+
+/*
  * shuffle_enqueue: start the sending of a message via the shuffle.
  * this is not end-to-end, it returns success once the message has
  * been queued for the next hop (the message data is copied into
@@ -203,6 +214,27 @@ shuffle_t shuffle_init(nexus_ctx_t nxp, char *funname,
  */
 hg_return_t shuffle_enqueue(shuffle_t sh, int dst, uint32_t type,
                             void *d, uint32_t datalen);
+
+/*
+ * broadcast flag bits
+ */
+#define SHUFFLE_BCAST_SELF 1  /* send a copy to our local delivery thread */
+
+/*
+ * shuffle_enqueue_broadcast: start the sending of a broadcast message
+ * via the shuffle (and the 3 hop topology).  Note that internally we
+ * convert the broadcast into normal RPCs.  In the unlikely event of
+ * a failure, it is possible for the broadcast to only partially complete.
+ *
+ * @param sh shuffle service handle
+ * @param type message type (normally 0)
+ * @param d data buffer
+ * @param datalen length of data
+ * @param flags currently we have bcast_self
+ * @return status (success if we've queued the data)
+ */
+hg_return_t shuffle_enqueue_broadcast(shuffle_t sh, uint32_t type, void *d,
+                                      uint32_t datalen, int flags);
 
 /*
  * shuffle_flush_delivery: flush the delivery queue.  this function

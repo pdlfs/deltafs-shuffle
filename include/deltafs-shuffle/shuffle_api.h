@@ -195,7 +195,7 @@ shuffle_t shuffle_init(nexus_ctx_t nxp, char *funname,
  * defines for request types
  */
 #define SHUFFLE_RTYPE_BCAST   (1 << 31)  /* req is a broadcast */
-#define SHUFFLE_RTYPE_USRBITS 0x8fffffff /* user-defined bits */
+#define SHUFFLE_RTYPE_USRBITS 0x7fffffff /* user-defined bits */
 
 /*
  * shuffle_enqueue: start the sending of a message via the shuffle.

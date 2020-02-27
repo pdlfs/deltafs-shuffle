@@ -96,7 +96,9 @@
 #include "shuf_mlog.h"
 
 static struct shufcfglog {
-  int on;                  /* set if enabled */
+  pthread_mutex_t cfglck;  /* lock data structure */
+  int ready;               /* set if shuffle_cfglog() ran successfully */
+  int opencnt;             /* cnt of log users */
   int max_xtra_rank;       /* rank <= max_xtra_rank: enable xtra logging */
   int defpri;              /* default priority for the rest */
   int stderrpri;           /* stderr priority for everyone else */
@@ -108,7 +110,7 @@ static struct shufcfglog {
   int msgbufsz;            /* message buf size */
   int stderrlog;           /* always log to stderr for other ranks */
   int xtra_stderrlog;      /* always log to stderr for xtra log ranks */
-} shufcfg = { 0 };
+} shufcfg = { PTHREAD_MUTEX_INITIALIZER, 0 };
 
 /*
  * shuffle_cfglog: setup logging before starting shuffle.  call
@@ -122,12 +124,18 @@ int shuffle_cfglog(int max_xtra_rank, const char *defpri,
                    int xtra_stderrlog) {
   char *tmpbuf;
 
+  pthread_mutex_lock(&shufcfg.cfglck);
+  if (shufcfg.ready) {
+    fprintf(stderr, "shuffle_cfglog: called but already init'd\n");
+    goto done;
+  }
+
   shufcfg.max_xtra_rank = max_xtra_rank;
 
   shufcfg.defpri = (defpri) ? shuf::mlog_str2pri(defpri) : MLOG_WARN;
   if (shufcfg.defpri == -1) {
     fprintf(stderr, "shuffle_cfglog: bad defpri %s\n", defpri);
-    return(-1);
+    goto err;
   }
 
   shufcfg.stderrpri = (stderrpri) ?
@@ -164,13 +172,16 @@ int shuffle_cfglog(int max_xtra_rank, const char *defpri,
   shufcfg.stderrlog = stderrlog;
   shufcfg.xtra_stderrlog = xtra_stderrlog;
 
-  shufcfg.on = 1;
+  shufcfg.ready = 1;
+done:
+  pthread_mutex_unlock(&shufcfg.cfglck);
   return(0);
 
 err:
   if (shufcfg.mask) free(shufcfg.mask);
   if (shufcfg.xmask) free(shufcfg.xmask);
   if (shufcfg.logfile) free(shufcfg.logfile);
+  pthread_mutex_unlock(&shufcfg.cfglck);
   return(-1);
 }
 
@@ -183,8 +194,9 @@ static void shuffle_openlog(int myrank) {
   int stderrlog, am_xtra, rv;
   char *lfile, *usemask;
 
-  if (shufcfg.on == 0)
-    return;
+  pthread_mutex_lock(&shufcfg.cfglck);
+  if (shufcfg.ready == 0 || shufcfg.opencnt > 0)
+    goto ret;
   am_xtra = (myrank <= shufcfg.max_xtra_rank);
   if (am_xtra) {
     stderrlog = (shufcfg.xtra_stderrlog) ? MLOG_STDERR : 0;
@@ -203,7 +215,7 @@ static void shuffle_openlog(int myrank) {
                        lfile, shufcfg.msgbufsz, stderrlog|MLOG_LOGPID, 0);
   if (rv < 0) {
     fprintf(stderr, "shuffle_openlog: failed!  log disabled\n");
-    shufcfg.on = 0;
+    shufcfg.ready = 0;
     goto done;
   }
 
@@ -212,6 +224,7 @@ static void shuffle_openlog(int myrank) {
       shuf::mlog_namefacility(CLNT_MLOG, "CLNT", NULL) < 0 ||
       shuf::mlog_namefacility(DLIV_MLOG, "DLIV", NULL) < 0) {
     fprintf(stderr, "shuffle_namefac: failed!  log disabled\n");
+    shufcfg.ready = 0;
     goto done;
   }
 
@@ -221,19 +234,27 @@ static void shuffle_openlog(int myrank) {
   if (usemask)
     shuf::mlog_setmasks(usemask, -1);  /* ignore errors */
 
+  shufcfg.opencnt++;
+
 done:
   if (shufcfg.logfile) free(shufcfg.logfile);
   if (shufcfg.mask) free(shufcfg.mask);
   if (shufcfg.xmask) free(shufcfg.xmask);
   shufcfg.logfile = shufcfg.mask = shufcfg.xmask = NULL;
+ret:
+  pthread_mutex_unlock(&shufcfg.cfglck);
 }
 
 /*
  * shuffle_closelog: end the log
  */
 static void shuffle_closelog() {
-  if (shufcfg.on)
+  pthread_mutex_lock(&shufcfg.cfglck);
+  if (shufcfg.ready && shufcfg.opencnt > 0) {
     shuf::mlog_close();
+    shufcfg.opencnt--;
+  }
+  pthread_mutex_unlock(&shufcfg.cfglck);
 }
 
 static void notify(int lvl, const char *fmt, ...)
@@ -252,7 +273,7 @@ static void notify(int lvl, const char *fmt, ...)
 static void notify(int lvl, const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  if (MLOG_NEVERLOG == 0 && shufcfg.on) {
+  if (MLOG_NEVERLOG == 0 && shufcfg.opencnt > 0) {
     shuf::vmlog(lvl, fmt, ap);
   } else {
     vfprintf(stderr, fmt, ap);

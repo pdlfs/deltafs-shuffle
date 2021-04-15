@@ -47,7 +47,6 @@
 #include <sys/types.h>
 
 #include <mercury.h>
-#include <mercury_log.h>
 #include <mercury_macros.h>
 #include <deltafs-nexus/deltafs-nexus_api.h>
 
@@ -544,9 +543,9 @@ static uint32_t zero = 0;   /* for end of list marker */
 /*
  * procheck: helper macro to reduce the verbage ...
  */
-#define procheck(R,MSG) if ((R) != HG_SUCCESS) { \
-    hg_log_write(HG_LOG_TYPE_ERROR, "HG", __FILE__, __LINE__, __func__, MSG); \
-    goto done; \
+#define procheck(R,MSG) if ((R) != HG_SUCCESS) {                 \
+    mlog(UTIL_ERR, "shuffle-procheck: %s @ %d", MSG, __LINE__);  \
+    goto done;                                                   \
 }
 
 /*
